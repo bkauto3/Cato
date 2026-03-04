@@ -1,0 +1,1378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cato Dashboard</title>
+<style>
+/* ── Reset & base ────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e2e8f0;font-size:14px;line-height:1.5}
+a{color:#3b82f6;text-decoration:none}
+button{cursor:pointer;font-family:inherit;font-size:inherit}
+input,textarea,select{font-family:inherit;font-size:inherit}
+pre,code{font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:13px}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#1a1d26}
+::-webkit-scrollbar-thumb{background:#374151;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#4b5563}
+
+/* ── Layout ──────────────────────────────────────────────────────── */
+#app{display:flex;height:100vh;overflow:hidden}
+#sidebar{width:220px;min-width:220px;background:#1a1d26;display:flex;flex-direction:column;border-right:1px solid #1e2433;overflow-y:auto;z-index:10}
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#topbar{height:48px;background:#1a1d26;border-bottom:1px solid #1e2433;display:flex;align-items:center;padding:0 20px;gap:12px;flex-shrink:0}
+#content{flex:1;overflow-y:auto;padding:24px}
+
+/* ── Sidebar ─────────────────────────────────────────────────────── */
+.sidebar-header{padding:16px 16px 8px;border-bottom:1px solid #1e2433}
+.sidebar-logo{font-size:18px;font-weight:700;color:#fff;letter-spacing:.05em;display:flex;align-items:center;justify-content:space-between}
+.sidebar-logo span.logo-text{color:#3b82f6}
+.health-pill{display:flex;align-items:center;gap:5px;font-size:11px;padding:3px 8px;border-radius:20px;background:#0f1117;border:1px solid #1e2433}
+.health-dot{width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0;transition:background .3s}
+.health-dot.online{background:#22c55e;box-shadow:0 0 6px #22c55e88}
+.health-pill.online .health-label{color:#22c55e}
+.health-label{font-weight:600;color:#ef4444}
+
+.nav-section{padding:8px 0}
+.nav-group-header{display:flex;align-items:center;justify-content:space-between;padding:6px 16px;cursor:pointer;color:#64748b;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;user-select:none}
+.nav-group-header:hover{color:#94a3b8}
+.nav-group-arrow{font-size:10px;transition:transform .2s}
+.nav-group-arrow.open{transform:rotate(0deg)}
+.nav-group-arrow.closed{transform:rotate(-90deg)}
+.nav-group-items{overflow:hidden;transition:max-height .25s ease}
+.nav-item{display:flex;align-items:center;gap:9px;padding:7px 16px 7px 28px;color:#94a3b8;cursor:pointer;transition:all .15s;border-left:2px solid transparent;margin:1px 0}
+.nav-item:hover{color:#e2e8f0;background:#ffffff08}
+.nav-item.active{color:#3b82f6;background:#3b82f610;border-left-color:#3b82f6}
+.nav-item-icon{width:16px;text-align:center;flex-shrink:0;font-size:15px}
+
+.sidebar-footer{margin-top:auto;padding:12px 16px;border-top:1px solid #1e2433;display:flex;align-items:center;justify-content:space-between}
+.version-badge{font-size:11px;color:#4b5563;background:#0f1117;padding:2px 6px;border-radius:4px;border:1px solid #1e2433}
+.gh-link{font-size:11px;color:#64748b;display:flex;align-items:center;gap:3px}
+.gh-link:hover{color:#94a3b8}
+
+/* ── Topbar ──────────────────────────────────────────────────────── */
+#page-title{font-size:16px;font-weight:600;color:#f1f5f9;flex:1}
+#global-search{position:relative;width:260px}
+#global-search input{width:100%;background:#0f1117;border:1px solid #1e2433;border-radius:6px;padding:6px 12px 6px 32px;color:#e2e8f0;outline:none;transition:border-color .15s}
+#global-search input:focus{border-color:#3b82f6}
+#global-search .search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#64748b;font-size:14px;pointer-events:none}
+.kbd{display:inline-flex;align-items:center;gap:2px;background:#1e2433;border:1px solid #374151;border-radius:4px;padding:1px 5px;font-size:10px;color:#94a3b8}
+
+/* ── Common UI components ────────────────────────────────────────── */
+.page{display:none}
+.page.active{display:block}
+.card{background:#1a1d26;border:1px solid #1e2433;border-radius:10px;padding:20px;margin-bottom:16px}
+.card-title{font-size:13px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:6px;border:none;font-weight:500;transition:all .15s;white-space:nowrap}
+.btn-primary{background:#3b82f6;color:#fff}
+.btn-primary:hover{background:#2563eb}
+.btn-secondary{background:#1e2433;color:#94a3b8;border:1px solid #374151}
+.btn-secondary:hover{background:#252d3d;color:#e2e8f0}
+.btn-danger{background:#7f1d1d;color:#fca5a5;border:1px solid #991b1b}
+.btn-danger:hover{background:#991b1b}
+.btn-ghost{background:transparent;color:#64748b;border:1px solid transparent}
+.btn-ghost:hover{background:#1e2433;color:#94a3b8}
+.btn-sm{padding:4px 10px;font-size:12px}
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.badge-red{background:#7f1d1d44;color:#fca5a5;border:1px solid #7f1d1d}
+.badge-yellow{background:#78350f44;color:#fcd34d;border:1px solid #78350f}
+.badge-green{background:#14532d44;color:#86efac;border:1px solid #14532d}
+.badge-blue{background:#1e3a5f44;color:#93c5fd;border:1px solid #1e3a5f}
+.badge-gray{background:#1e2433;color:#64748b;border:1px solid #374151}
+.form-group{margin-bottom:16px}
+.form-label{display:block;font-size:12px;font-weight:500;color:#94a3b8;margin-bottom:6px}
+.form-input{width:100%;background:#0f1117;border:1px solid #1e2433;border-radius:6px;padding:8px 12px;color:#e2e8f0;outline:none;transition:border-color .15s}
+.form-input:focus{border-color:#3b82f6}
+.form-input::placeholder{color:#374151}
+textarea.form-input{resize:vertical;min-height:80px}
+.table{width:100%;border-collapse:collapse}
+.table th{text-align:left;padding:8px 12px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid #1e2433}
+.table td{padding:10px 12px;border-bottom:1px solid #0f111744;color:#94a3b8;vertical-align:middle}
+.table tr:last-child td{border-bottom:none}
+.table tr:hover td{background:#ffffff04}
+.divider{border:none;border-top:1px solid #1e2433;margin:16px 0}
+.empty-state{text-align:center;padding:48px 24px;color:#4b5563}
+.empty-state-icon{font-size:40px;margin-bottom:12px;opacity:.5}
+.empty-state p{font-size:13px}
+.tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;background:#1e2433;color:#64748b;border:1px solid #374151;margin:2px}
+.progress-bar-wrap{background:#0f1117;border-radius:4px;height:8px;overflow:hidden;margin-top:6px}
+.progress-bar-fill{height:100%;border-radius:4px;background:#3b82f6;transition:width .3s}
+.progress-bar-fill.warn{background:#f59e0b}
+.progress-bar-fill.danger{background:#ef4444}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #374151;border-top-color:#3b82f6;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.typing-dots span{display:inline-block;animation:blink .8s ease infinite}
+.typing-dots span:nth-child(2){animation-delay:.2s}
+.typing-dots span:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+.alert-banner{background:#7c2d1244;border:1px solid #7c2d12;border-radius:8px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:10px;color:#fdba74}
+.modal-overlay{position:fixed;inset:0;background:#000000cc;z-index:100;display:flex;align-items:center;justify-content:center}
+.modal{background:#1a1d26;border:1px solid #1e2433;border-radius:12px;padding:28px;width:480px;max-width:95vw;max-height:90vh;overflow-y:auto}
+.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.modal-title{font-size:16px;font-weight:600;color:#f1f5f9}
+.modal-close{background:none;border:none;color:#64748b;font-size:18px;padding:4px 8px;border-radius:4px}
+.modal-close:hover{background:#1e2433;color:#e2e8f0}
+.tab-bar{display:flex;border-bottom:1px solid #1e2433;margin-bottom:20px}
+.tab-btn{padding:8px 16px;background:none;border:none;color:#64748b;border-bottom:2px solid transparent;font-weight:500;transition:all .15s;cursor:pointer}
+.tab-btn.active{color:#3b82f6;border-bottom-color:#3b82f6}
+.tab-btn:hover{color:#94a3b8}
+.notification{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;background:#0f1117;border-radius:8px;border:1px solid #1e2433;margin-bottom:8px}
+.notif-icon{font-size:15px;flex-shrink:0;margin-top:1px}
+.notif-body{flex:1}
+.notif-msg{color:#94a3b8;font-size:13px}
+.notif-time{font-size:11px;color:#4b5563;margin-top:2px}
+
+/* ── Chat page ───────────────────────────────────────────────────── */
+#chat-page{display:none;height:100%}
+#chat-page.active{display:flex;gap:0;height:calc(100vh - 48px);margin:-24px}
+.session-list{width:240px;min-width:240px;border-right:1px solid #1e2433;overflow-y:auto;background:#151820}
+.session-list-header{padding:14px 16px;border-bottom:1px solid #1e2433;display:flex;align-items:center;justify-content:space-between}
+.session-list-title{font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.06em}
+.session-item{padding:12px 14px;cursor:pointer;border-bottom:1px solid #1e2433;transition:background .15s;position:relative}
+.session-item:hover{background:#1a1d26}
+.session-item.active{background:#1e2433}
+.session-id{font-size:12px;font-weight:600;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:20px}
+.session-preview{font-size:11px;color:#4b5563;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-time{font-size:10px;color:#374151;margin-top:3px}
+.session-kill{position:absolute;top:10px;right:10px;background:none;border:none;color:#4b5563;font-size:13px;padding:2px 5px;border-radius:3px;opacity:0;transition:opacity .15s}
+.session-item:hover .session-kill{opacity:1}
+.session-kill:hover{background:#7f1d1d44;color:#fca5a5}
+.chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.chat-messages{flex:1;overflow-y:auto;padding:20px}
+.chat-empty{display:flex;align-items:center;justify-content:center;height:100%;color:#4b5563;flex-direction:column;gap:10px}
+.chat-empty-icon{font-size:36px;opacity:.3}
+.msg-row{display:flex;gap:10px;margin-bottom:18px;align-items:flex-start}
+.msg-row.user{flex-direction:row-reverse}
+.msg-avatar{width:32px;height:32px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700}
+.msg-avatar.user-av{background:#1e3a5f;color:#93c5fd}
+.msg-avatar.bot-av{background:#1e3a5f44;color:#3b82f6;border:1px solid #1e3a5f}
+.msg-bubble{max-width:72%;background:#1a1d26;border:1px solid #1e2433;border-radius:10px;padding:10px 14px}
+.msg-row.user .msg-bubble{background:#1e3a5f55;border-color:#1e3a5f}
+.msg-text{color:#e2e8f0;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.msg-footer{font-size:11px;color:#4b5563;margin-top:6px;font-style:italic}
+.chat-input-bar{padding:16px;border-top:1px solid #1e2433;display:flex;gap:10px;align-items:flex-end;background:#151820}
+.chat-input-bar textarea{flex:1;background:#0f1117;border:1px solid #1e2433;border-radius:8px;padding:10px 14px;color:#e2e8f0;resize:none;outline:none;max-height:120px;min-height:40px;height:40px;transition:border-color .15s}
+.chat-input-bar textarea:focus{border-color:#3b82f6}
+#new-session-btn{background:#1e2433;border:1px dashed #374151;color:#64748b;border-radius:6px;padding:5px 10px;font-size:12px}
+#new-session-btn:hover{border-color:#3b82f6;color:#3b82f6}
+
+/* ── Usage page CSS bars ─────────────────────────────────────────── */
+.usage-bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.usage-bar-label{width:140px;font-size:12px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.usage-bar-wrap{flex:1;background:#0f1117;border-radius:3px;height:16px;overflow:hidden}
+.usage-bar-fill{height:100%;background:#3b82f6;border-radius:3px;transition:width .4s}
+.usage-bar-val{width:60px;text-align:right;font-size:12px;color:#64748b;flex-shrink:0}
+
+/* ── Logs page ───────────────────────────────────────────────────── */
+#log-output{background:#0a0c11;border-radius:8px;padding:14px;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:12px;overflow-y:auto;max-height:calc(100vh - 220px);min-height:300px;border:1px solid #1e2433}
+.log-line{padding:1px 0;white-space:pre-wrap;word-break:break-all}
+.log-ERROR{color:#f87171}
+.log-WARN,.log-WARNING{color:#fbbf24}
+.log-INFO{color:#94a3b8}
+.log-DEBUG{color:#4b5563}
+
+/* ── Skills grid ─────────────────────────────────────────────────── */
+.skills-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.skill-card{background:#1a1d26;border:1px solid #1e2433;border-radius:10px;padding:18px;cursor:pointer;transition:all .15s}
+.skill-card:hover{border-color:#3b82f6;background:#1e2433}
+.skill-card-name{font-size:14px;font-weight:600;color:#e2e8f0;margin-bottom:4px}
+.skill-card-desc{font-size:12px;color:#64748b;line-height:1.5;margin-bottom:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.skill-card-footer{display:flex;align-items:center;justify-content:space-between}
+.skill-version{font-size:11px;color:#374151;background:#0f1117;padding:2px 7px;border-radius:4px;border:1px solid #1e2433}
+
+/* ── Config toggle ───────────────────────────────────────────────── */
+.config-toggle{display:flex;background:#0f1117;border-radius:6px;border:1px solid #1e2433;overflow:hidden;width:fit-content}
+.config-toggle button{padding:6px 14px;background:none;border:none;color:#64748b;font-weight:500;transition:all .15s;cursor:pointer}
+.config-toggle button.active{background:#1e2433;color:#3b82f6}
+
+/* ── Budget page ─────────────────────────────────────────────────── */
+.budget-inputs{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
+.spend-gauge-wrap{margin:16px 0}
+.spend-gauge-label{display:flex;justify-content:space-between;margin-bottom:6px;font-size:12px;color:#94a3b8}
+.preset-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.preset-btn{background:#0f1117;border:1px solid #374151;color:#94a3b8;border-radius:5px;padding:4px 12px;font-size:12px;cursor:pointer;transition:all .15s}
+.preset-btn:hover,.preset-btn.active{background:#1e3a5f;border-color:#3b82f6;color:#93c5fd}
+
+/* ── Cron page ───────────────────────────────────────────────────── */
+.cron-add-form{background:#0f1117;border:1px solid #1e2433;border-radius:8px;padding:16px;margin-bottom:16px;display:none}
+.cron-add-form.open{display:block}
+.cron-row-meta{display:flex;gap:6px;flex-direction:column}
+.cron-schedule-tag{font-size:11px;font-family:'Cascadia Code','Consolas',monospace;color:#93c5fd;background:#1e3a5f22;border:1px solid #1e3a5f;padding:2px 6px;border-radius:4px;display:inline-block}
+
+/* ── Onboarding wizard ───────────────────────────────────────────── */
+#onboarding-overlay{position:fixed;inset:0;background:#0f1117;z-index:200;display:flex;align-items:center;justify-content:center}
+.wizard-card{background:#1a1d26;border:1px solid #1e2433;border-radius:16px;padding:36px;width:500px;max-width:95vw}
+.wizard-title{font-size:22px;font-weight:700;color:#f1f5f9;margin-bottom:6px}
+.wizard-subtitle{font-size:14px;color:#64748b;margin-bottom:28px}
+.wizard-progress{display:flex;gap:8px;margin-bottom:28px}
+.wizard-step-dot{width:8px;height:8px;border-radius:50%;background:#1e2433;border:1px solid #374151;transition:all .2s}
+.wizard-step-dot.done{background:#22c55e;border-color:#22c55e}
+.wizard-step-dot.active{background:#3b82f6;border-color:#3b82f6;box-shadow:0 0 0 3px #3b82f620}
+.wizard-actions{display:flex;justify-content:space-between;margin-top:24px}
+.wizard-step{display:none}
+.wizard-step.active{display:block}
+</style>
+</head>
+<body>
+
+<!-- ── Onboarding Wizard ──────────────────────────────────────────── -->
+<div id="onboarding-overlay" style="display:none">
+  <div class="wizard-card">
+    <div id="wiz-step-1" class="wizard-step active">
+      <div class="wizard-title">Welcome to Cato</div>
+      <div class="wizard-subtitle">Let's get you set up in under a minute.</div>
+      <div class="wizard-progress" id="wiz-progress"></div>
+      <div class="form-group">
+        <label class="form-label">Monthly Budget Cap (USD)</label>
+        <input type="number" class="form-input" id="wiz-budget" placeholder="25" min="1" value="25">
+        <div class="preset-btns">
+          <button class="preset-btn" onclick="setWizBudget(10)">$10</button>
+          <button class="preset-btn active" onclick="setWizBudget(25)">$25</button>
+          <button class="preset-btn" onclick="setWizBudget(50)">$50</button>
+          <button class="preset-btn" onclick="setWizBudget(100)">$100</button>
+        </div>
+      </div>
+      <div class="wizard-actions">
+        <span></span>
+        <button class="btn btn-primary" onclick="wizNext()">Next &rarr;</button>
+      </div>
+    </div>
+
+    <div id="wiz-step-2" class="wizard-step">
+      <div class="wizard-title">Add an API Key</div>
+      <div class="wizard-subtitle">Cato needs at least one model provider key.</div>
+      <div class="wizard-progress" id="wiz-progress2"></div>
+      <div class="form-group">
+        <label class="form-label">Provider</label>
+        <select class="form-input" id="wiz-provider">
+          <option value="claude">Anthropic / Claude</option>
+          <option value="openai">OpenAI</option>
+          <option value="gemini">Google Gemini</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">API Key</label>
+        <input type="password" class="form-input" id="wiz-apikey" placeholder="sk-ant-...">
+      </div>
+      <div class="wizard-actions">
+        <button class="btn btn-ghost" onclick="wizBack()">Back</button>
+        <button class="btn btn-primary" onclick="wizNext()">Next &rarr;</button>
+      </div>
+    </div>
+
+    <div id="wiz-step-3" class="wizard-step">
+      <div class="wizard-title">Connect Telegram</div>
+      <div class="wizard-subtitle">Optional — skip if you only want the web interface.</div>
+      <div class="wizard-progress" id="wiz-progress3"></div>
+      <div class="form-group">
+        <label class="form-label">Bot Token</label>
+        <input type="password" class="form-input" id="wiz-tg-token" placeholder="1234567890:AAAA...">
+      </div>
+      <div class="wizard-actions">
+        <button class="btn btn-ghost" onclick="wizBack()">Back</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-secondary" onclick="wizNext()">Skip</button>
+          <button class="btn btn-primary" onclick="wizSaveTg()">Connect &amp; Next &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="wiz-step-4" class="wizard-step">
+      <div class="wizard-title" style="color:#22c55e">You're ready!</div>
+      <div class="wizard-subtitle">Cato is configured and running. Open the dashboard to begin.</div>
+      <div style="font-size:48px;text-align:center;padding:24px 0;opacity:.7">&#128512;</div>
+      <div class="wizard-actions">
+        <span></span>
+        <button class="btn btn-primary" onclick="dismissOnboarding()" style="background:#22c55e">Launch Dashboard &rarr;</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── App Shell ──────────────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <span><span class="logo-text">CA</span>TO</span>
+        <div class="health-pill" id="health-pill">
+          <div class="health-dot" id="health-dot"></div>
+          <span class="health-label" id="health-label">Offline</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-group-header" onclick="toggleGroup('workspace')">
+        <span>Workspace</span>
+        <span class="nav-group-arrow open" id="arrow-workspace">&#9660;</span>
+      </div>
+      <div id="group-workspace">
+        <div class="nav-item" data-page="chat" onclick="navigate('chat')"><span class="nav-item-icon">&#128172;</span>Chat</div>
+        <div class="nav-item" data-page="agents" onclick="navigate('agents')"><span class="nav-item-icon">&#129302;</span>Agents</div>
+        <div class="nav-item" data-page="skills" onclick="navigate('skills')"><span class="nav-item-icon">&#127381;</span>Skills</div>
+      </div>
+
+      <div class="nav-group-header" onclick="toggleGroup('automation')">
+        <span>Automation</span>
+        <span class="nav-group-arrow open" id="arrow-automation">&#9660;</span>
+      </div>
+      <div id="group-automation">
+        <div class="nav-item" data-page="cron" onclick="navigate('cron')"><span class="nav-item-icon">&#9201;</span>Cron</div>
+        <div class="nav-item" data-page="sessions" onclick="navigate('sessions')"><span class="nav-item-icon">&#128203;</span>Sessions</div>
+      </div>
+
+      <div class="nav-group-header" onclick="toggleGroup('monitoring')">
+        <span>Monitoring</span>
+        <span class="nav-group-arrow open" id="arrow-monitoring">&#9660;</span>
+      </div>
+      <div id="group-monitoring">
+        <div class="nav-item" data-page="usage" onclick="navigate('usage')"><span class="nav-item-icon">&#128200;</span>Usage</div>
+        <div class="nav-item" data-page="logs" onclick="navigate('logs')"><span class="nav-item-icon">&#128196;</span>Logs</div>
+        <div class="nav-item" data-page="alerts" onclick="navigate('alerts')"><span class="nav-item-icon">&#128276;</span>Alerts <span id="alert-badge" style="margin-left:4px;display:none" class="badge badge-red">0</span></div>
+      </div>
+
+      <div class="nav-group-header" onclick="toggleGroup('settings')">
+        <span>Settings</span>
+        <span class="nav-group-arrow open" id="arrow-settings">&#9660;</span>
+      </div>
+      <div id="group-settings">
+        <div class="nav-item" data-page="config" onclick="navigate('config')"><span class="nav-item-icon">&#9881;</span>Config</div>
+        <div class="nav-item" data-page="budget" onclick="navigate('budget')"><span class="nav-item-icon">&#128176;</span>Budget</div>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <span class="version-badge">v0.1.0</span>
+      <a class="gh-link" href="https://github.com/your-org/cato" target="_blank">GitHub &#8599;</a>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <div id="main">
+    <!-- Topbar -->
+    <div id="topbar">
+      <span id="page-title">Chat</span>
+      <div id="global-search">
+        <span class="search-icon">&#128269;</span>
+        <input type="text" placeholder="Search... " id="search-input" autocomplete="off">
+        <span class="kbd" style="position:absolute;right:8px;top:50%;transform:translateY(-50%)">&#8984;K</span>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div id="content">
+
+      <!-- Chat (special full-height layout) -->
+      <div id="chat-page" class="page">
+        <div class="session-list">
+          <div class="session-list-header">
+            <span class="session-list-title">Sessions</span>
+            <button id="new-session-btn" onclick="newSession()" title="New session">+</button>
+          </div>
+          <div id="session-list-items"></div>
+        </div>
+        <div class="chat-area">
+          <div class="chat-messages" id="chat-messages">
+            <div class="chat-empty" id="chat-empty">
+              <div class="chat-empty-icon">&#128172;</div>
+              <span>Select a session or start a new one</span>
+            </div>
+          </div>
+          <div class="chat-input-bar">
+            <textarea id="chat-input" placeholder="Type a message... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
+            <button class="btn btn-primary" onclick="sendMessage()">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agents -->
+      <div id="agents-page" class="page">
+        <div class="card">
+          <div class="card-title">Registered Agents</div>
+          <table class="table" id="agents-table">
+            <thead><tr><th>Agent ID</th><th>Workspace</th><th>Files</th><th>Status</th></tr></thead>
+            <tbody id="agents-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Skills -->
+      <div id="skills-page" class="page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <span style="color:#94a3b8;font-size:13px" id="skills-count">0 skills installed</span>
+          <button class="btn btn-primary btn-sm" onclick="openInstallModal()">+ Install Skill</button>
+        </div>
+        <div class="skills-grid" id="skills-grid"></div>
+      </div>
+
+      <!-- Cron -->
+      <div id="cron-page" class="page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <span style="color:#64748b;font-size:13px">Scheduled tasks</span>
+          <button class="btn btn-primary btn-sm" onclick="toggleCronForm()">+ Add Cron</button>
+        </div>
+        <div class="cron-add-form" id="cron-add-form">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Cron Expression</label>
+              <input class="form-input" id="cron-schedule" placeholder="0 9 * * 1-5">
+            </div>
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Agent</label>
+              <input class="form-input" id="cron-agent" placeholder="default">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Prompt</label>
+            <textarea class="form-input" id="cron-prompt" placeholder="Run daily report..." rows="2"></textarea>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn btn-ghost btn-sm" onclick="toggleCronForm()">Cancel</button>
+            <button class="btn btn-primary btn-sm" onclick="saveCron()">Save</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="table" id="cron-table">
+            <thead><tr><th>Schedule</th><th>Agent</th><th>Prompt</th><th>Last Run</th><th>Next Run</th><th></th></tr></thead>
+            <tbody id="cron-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Sessions -->
+      <div id="sessions-page" class="page">
+        <div class="card">
+          <div class="card-title">Active Sessions</div>
+          <table class="table">
+            <thead><tr><th>Session ID</th><th>Channel</th><th>Queue Depth</th><th>Last Active</th><th></th></tr></thead>
+            <tbody id="sessions-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Usage -->
+      <div id="usage-page" class="page">
+        <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm usage-period active" data-period="today" onclick="setUsagePeriod('today',this)">Today</button>
+          <button class="btn btn-secondary btn-sm usage-period" data-period="7d" onclick="setUsagePeriod('7d',this)">7 Days</button>
+          <button class="btn btn-secondary btn-sm usage-period" data-period="30d" onclick="setUsagePeriod('30d',this)">30 Days</button>
+          <button class="btn btn-secondary btn-sm usage-period" data-period="all" onclick="setUsagePeriod('all',this)">All Time</button>
+        </div>
+        <div class="card" id="usage-bars-card">
+          <div class="card-title">Calls per Model</div>
+          <div id="usage-bars"></div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="table" id="usage-table">
+            <thead><tr><th>Model</th><th>Calls</th><th>Input Tokens</th><th>Output Tokens</th><th>Cost USD</th></tr></thead>
+            <tbody id="usage-tbody"></tbody>
+            <tfoot><tr id="usage-total-row" style="background:#1e2433"><td colspan="4" style="padding:10px 12px;font-weight:600;color:#e2e8f0">Total</td><td id="usage-total-cost" style="padding:10px 12px;font-weight:700;color:#22c55e"></td></tr></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <!-- Logs -->
+      <div id="logs-page" class="page">
+        <div style="display:flex;gap:10px;margin-bottom:12px;align-items:center">
+          <input class="form-input" id="log-filter" placeholder="Filter logs..." style="flex:1" oninput="filterLogs()">
+          <button class="btn btn-secondary btn-sm" onclick="clearLogs()">Clear</button>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8;cursor:pointer">
+            <input type="checkbox" id="log-autoscroll" checked> Auto-scroll
+          </label>
+        </div>
+        <div id="log-output"></div>
+      </div>
+
+      <!-- Config -->
+      <div id="config-page" class="page">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div class="config-toggle">
+            <button class="active" id="cfg-form-btn" onclick="switchConfig('form')">Form</button>
+            <button id="cfg-raw-btn" onclick="switchConfig('raw')">Raw JSON</button>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="saveConfig()">Save Changes</button>
+        </div>
+        <div id="cfg-form-view" class="card">
+          <div id="cfg-fields"></div>
+        </div>
+        <div id="cfg-raw-view" class="card" style="display:none">
+          <textarea class="form-input" id="cfg-raw-json" style="min-height:400px;font-family:'Cascadia Code','Consolas',monospace;font-size:13px"></textarea>
+        </div>
+      </div>
+
+      <!-- Budget -->
+      <div id="budget-page" class="page">
+        <div id="budget-warning" class="alert-banner" style="display:none">
+          <span>&#9888;</span>
+          <span id="budget-warning-msg"></span>
+        </div>
+        <div class="card">
+          <div class="card-title">Budget Limits</div>
+          <div class="budget-inputs">
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Monthly Cap (USD)</label>
+              <input class="form-input" type="number" id="budget-monthly" placeholder="25" min="1">
+            </div>
+            <div class="form-group" style="margin:0">
+              <label class="form-label">Per-Session Cap (USD)</label>
+              <input class="form-input" type="number" id="budget-session" placeholder="1.00" step="0.01" min="0.01">
+            </div>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="saveBudget()">Save Budget</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Current Month Spend</div>
+          <div class="spend-gauge-wrap">
+            <div class="spend-gauge-label">
+              <span id="budget-spent-label">$0.00 spent</span>
+              <span id="budget-cap-label">of $25.00</span>
+            </div>
+            <div class="progress-bar-wrap" style="height:12px">
+              <div class="progress-bar-fill" id="budget-gauge" style="width:0%"></div>
+            </div>
+            <div style="text-align:right;font-size:11px;color:#64748b;margin-top:4px" id="budget-pct-label">0%</div>
+          </div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="table" id="budget-model-table">
+            <thead><tr><th>Model</th><th>Input $/M</th><th>Output $/M</th><th>Used This Month</th></tr></thead>
+            <tbody id="budget-model-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Alerts -->
+      <div id="alerts-page" class="page">
+        <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+          <span style="color:#94a3b8;font-size:13px;flex:1" id="alerts-count">0 notifications</span>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-secondary btn-sm alert-filter active" data-level="all" onclick="filterAlerts('all',this)">All</button>
+            <button class="btn btn-secondary btn-sm alert-filter" data-level="error" onclick="filterAlerts('error',this)">Error</button>
+            <button class="btn btn-secondary btn-sm alert-filter" data-level="warn" onclick="filterAlerts('warn',this)">Warn</button>
+            <button class="btn btn-secondary btn-sm alert-filter" data-level="info" onclick="filterAlerts('info',this)">Info</button>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="clearAlerts()">Clear All</button>
+        </div>
+        <div id="alerts-list"></div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- ── Skill Detail Side Panel ────────────────────────────────────── -->
+<div id="skill-panel" style="position:fixed;top:0;right:0;bottom:0;width:400px;background:#1a1d26;border-left:1px solid #1e2433;z-index:50;transform:translateX(100%);transition:transform .3s;overflow-y:auto;display:flex;flex-direction:column">
+  <div style="padding:16px;border-bottom:1px solid #1e2433;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+    <span id="skill-panel-title" style="font-weight:600;color:#f1f5f9"></span>
+    <button onclick="closeSkillPanel()" class="btn btn-ghost btn-sm">&#10005;</button>
+  </div>
+  <div id="skill-panel-body" style="padding:16px;flex:1;overflow-y:auto;font-size:13px;color:#94a3b8;white-space:pre-wrap;line-height:1.6;word-break:break-word"></div>
+</div>
+
+<!-- ── Skill Install Modal ────────────────────────────────────────── -->
+<div id="install-modal" class="modal-overlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Install Skill</span>
+      <button class="modal-close" onclick="closeInstallModal()">&#10005;</button>
+    </div>
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tab-git" onclick="switchInstallTab('git')">Git URL</button>
+      <button class="tab-btn" id="tab-upload" onclick="switchInstallTab('upload')">Upload SKILL.md</button>
+    </div>
+    <div id="install-git-tab">
+      <div class="form-group">
+        <label class="form-label">Repository URL</label>
+        <input class="form-input" id="skill-git-url" placeholder="https://github.com/user/skill-repo">
+      </div>
+      <button class="btn btn-primary" onclick="installSkillGit()">Install</button>
+    </div>
+    <div id="install-upload-tab" style="display:none">
+      <div id="drop-zone" style="border:2px dashed #374151;border-radius:8px;padding:32px;text-align:center;color:#4b5563;cursor:pointer;transition:all .15s" ondragover="event.preventDefault();this.style.borderColor='#3b82f6'" ondragleave="this.style.borderColor='#374151'" ondrop="handleSkillDrop(event)">
+        <div style="font-size:32px;margin-bottom:8px">&#128196;</div>
+        <p>Drop SKILL.md here or</p>
+        <input type="file" id="skill-file-input" style="display:none" accept=".md" onchange="handleSkillFile(this)">
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="document.getElementById('skill-file-input').click()">Browse</button>
+      </div>
+      <div id="skill-file-name" style="margin-top:8px;font-size:12px;color:#64748b"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+   CATO DASHBOARD — vanilla JS SPA
+   ================================================================ */
+
+// ── State ─────────────────────────────────────────────────────────
+const state = {
+  ws: null, wsReady: false, wsRetries: 0,
+  currentPage: 'chat',
+  currentSession: null,
+  sessions: {},      // session_id → {messages:[], lastActivity}
+  logs: [],
+  allLogs: [],
+  alerts: [],
+  alertFilter: 'all',
+  usagePeriod: 'today',
+  cronJobs: [],
+  skills: [],
+  agents: [],
+  config: {},
+  budget: { monthly: 25, session: 1, spent: 0 },
+  modelPricing: [
+    { model: 'claude-3-5-sonnet', input: 3.00, output: 15.00, used: 0 },
+    { model: 'claude-3-haiku',    input: 0.25, output: 1.25,  used: 0 },
+    { model: 'gpt-4o',            input: 5.00, output: 15.00, used: 0 },
+    { model: 'gpt-4o-mini',       input: 0.15, output: 0.60,  used: 0 },
+    { model: 'gemini-1.5-pro',    input: 3.50, output: 10.50, used: 0 },
+  ],
+  usageData: {},
+  onboardingDone: false,
+};
+
+// ── WebSocket ─────────────────────────────────────────────────────
+function connectWS() {
+  if (state.ws && state.ws.readyState <= 1) return;
+  try {
+    state.ws = new WebSocket('ws://127.0.0.1:18789/ws');
+    state.ws.onopen = () => {
+      state.wsReady = true; state.wsRetries = 0;
+      setHealth(true);
+      state.ws.send(JSON.stringify({ type: 'health' }));
+      appendAlert('info', 'WebSocket connected to Cato daemon');
+    };
+    state.ws.onclose = () => {
+      state.wsReady = false; setHealth(false);
+      const delay = Math.min(3000 * (state.wsRetries + 1), 15000);
+      state.wsRetries++;
+      setTimeout(connectWS, delay);
+    };
+    state.ws.onerror = () => { state.wsReady = false; setHealth(false); };
+    state.ws.onmessage = (e) => {
+      try { handleWsMessage(JSON.parse(e.data)); }
+      catch (_) { /* ignore malformed */ }
+    };
+  } catch (_) { setHealth(false); setTimeout(connectWS, 3000); }
+}
+
+function wsSend(obj) {
+  if (state.wsReady && state.ws) {
+    state.ws.send(JSON.stringify(obj));
+    return true;
+  }
+  return false;
+}
+
+function handleWsMessage(data) {
+  switch (data.type) {
+    case 'health':
+      setHealth(true, data);
+      break;
+    case 'response':
+      hideTyping(data.session_id);
+      addMessage(data.session_id, 'assistant', data.text, data.cost_footer);
+      break;
+    case 'log':
+      appendLog(data.level || 'INFO', data.text || data.message || '');
+      break;
+    case 'error':
+      appendAlert('error', data.text || data.message || 'Unknown error');
+      break;
+    case 'sessions_update':
+      if (data.sessions) updateSessionsFromServer(data.sessions);
+      break;
+  }
+}
+
+// ── Health ────────────────────────────────────────────────────────
+function setHealth(online, data) {
+  const dot   = document.getElementById('health-dot');
+  const lbl   = document.getElementById('health-label');
+  const pill  = document.getElementById('health-pill');
+  if (online) {
+    dot.classList.add('online'); lbl.textContent = 'Online';
+    pill.classList.add('online');
+  } else {
+    dot.classList.remove('online'); lbl.textContent = 'Offline';
+    pill.classList.remove('online');
+  }
+}
+
+// ── Navigation ────────────────────────────────────────────────────
+const PAGE_TITLES = {
+  chat:'Chat', agents:'Agents', skills:'Skills', cron:'Cron', sessions:'Sessions',
+  usage:'Usage', logs:'Logs', alerts:'Alerts', config:'Config', budget:'Budget',
+};
+
+function navigate(page) {
+  state.currentPage = page;
+  window.location.hash = page;
+
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.page === page);
+  });
+  document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
+
+  const el = document.getElementById(page + '-page');
+  if (el) el.classList.add('active');
+
+  document.getElementById('page-title').textContent = PAGE_TITLES[page] || page;
+  document.getElementById('content').style.padding = (page === 'chat') ? '0' : '24px';
+
+  onPageEnter(page);
+}
+
+function onPageEnter(page) {
+  if (page === 'chat')     renderSessions();
+  if (page === 'agents')   renderAgents();
+  if (page === 'skills')   renderSkills();
+  if (page === 'cron')     renderCron();
+  if (page === 'sessions') renderSessionsPage();
+  if (page === 'usage')    renderUsage();
+  if (page === 'logs')     filterLogs();
+  if (page === 'config')   renderConfig();
+  if (page === 'budget')   renderBudget();
+  if (page === 'alerts')   renderAlerts();
+}
+
+function toggleGroup(name) {
+  const el    = document.getElementById('group-' + name);
+  const arrow = document.getElementById('arrow-' + name);
+  const open  = el.style.maxHeight !== '0px' && el.style.maxHeight !== '';
+  if (open) {
+    el.style.maxHeight = '0px'; el.style.overflow = 'hidden';
+    arrow.classList.remove('open'); arrow.classList.add('closed');
+  } else {
+    el.style.maxHeight = '500px'; el.style.overflow = '';
+    arrow.classList.add('open'); arrow.classList.remove('closed');
+  }
+}
+
+// ── Chat ──────────────────────────────────────────────────────────
+function newSession() {
+  const id = 'web:' + Date.now();
+  state.sessions[id] = { messages: [], lastActivity: Date.now() };
+  state.currentSession = id;
+  renderSessions();
+  renderMessages(id);
+}
+
+function selectSession(id) {
+  state.currentSession = id;
+  renderSessions();
+  renderMessages(id);
+}
+
+function killSession(id, e) {
+  e.stopPropagation();
+  if (!confirm('Kill session ' + id + '?')) return;
+  wsSend({ type: 'kill_session', session_id: id });
+  delete state.sessions[id];
+  if (state.currentSession === id) {
+    state.currentSession = null;
+    document.getElementById('chat-messages').innerHTML =
+      '<div class="chat-empty"><div class="chat-empty-icon">&#128172;</div><span>Select a session or start a new one</span></div>';
+  }
+  renderSessions();
+}
+
+function renderSessions() {
+  const list = document.getElementById('session-list-items');
+  const ids  = Object.keys(state.sessions).sort((a,b) =>
+    (state.sessions[b].lastActivity||0) - (state.sessions[a].lastActivity||0));
+  if (!ids.length) {
+    list.innerHTML = '<div style="padding:20px 16px;text-align:center;color:#4b5563;font-size:12px">No sessions yet<br>Click + to start</div>';
+    return;
+  }
+  list.innerHTML = ids.map(id => {
+    const s = state.sessions[id];
+    const last = s.messages.slice(-1)[0];
+    const preview = last ? last.text.slice(0, 45) + (last.text.length > 45 ? '...' : '') : 'No messages yet';
+    const ts = s.lastActivity ? new Date(s.lastActivity).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+    const active = id === state.currentSession ? ' active' : '';
+    return `<div class="session-item${active}" onclick="selectSession('${esc(id)}')">
+      <button class="session-kill" onclick="killSession('${esc(id)}',event)" title="Kill session">&#10005;</button>
+      <div class="session-id">${esc(id)}</div>
+      <div class="session-preview">${esc(preview)}</div>
+      <div class="session-time">${ts}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderMessages(sessionId) {
+  const wrap = document.getElementById('chat-messages');
+  const s = state.sessions[sessionId];
+  if (!s || !s.messages.length) {
+    wrap.innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">&#128172;</div><span>Say something to start the conversation</span></div>';
+    return;
+  }
+  wrap.innerHTML = s.messages.map(m => {
+    const isUser = m.role === 'user';
+    return `<div class="msg-row${isUser ? ' user' : ''}">
+      <div class="msg-avatar ${isUser ? 'user-av' : 'bot-av'}">${isUser ? 'U' : 'AI'}</div>
+      <div class="msg-bubble">
+        <div class="msg-text">${esc(m.text)}</div>
+        ${m.footer ? `<div class="msg-footer">${esc(m.footer)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('') + '<div id="typing-indicator" style="display:none" class="msg-row"><div class="msg-avatar bot-av">AI</div><div class="msg-bubble"><div class="typing-dots"><span>&#8226;</span><span>&#8226;</span><span>&#8226;</span></div></div></div>';
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+function addMessage(sessionId, role, text, footer) {
+  if (!state.sessions[sessionId]) state.sessions[sessionId] = { messages: [], lastActivity: Date.now() };
+  state.sessions[sessionId].messages.push({ role, text, footer });
+  state.sessions[sessionId].lastActivity = Date.now();
+  if (state.currentSession === sessionId) renderMessages(sessionId);
+  renderSessions();
+}
+
+function showTyping(sessionId) {
+  if (state.currentSession !== sessionId) return;
+  const el = document.getElementById('typing-indicator');
+  if (el) { el.style.display = 'flex'; document.getElementById('chat-messages').scrollTop = 9999; }
+}
+
+function hideTyping(sessionId) {
+  const el = document.getElementById('typing-indicator');
+  if (el) el.style.display = 'none';
+}
+
+function sendMessage() {
+  const inp = document.getElementById('chat-input');
+  const text = inp.value.trim();
+  if (!text) return;
+  if (!state.currentSession) newSession();
+  addMessage(state.currentSession, 'user', text, '');
+  inp.value = ''; inp.style.height = '40px';
+  const sent = wsSend({ type: 'message', session_id: state.currentSession, text, channel: 'web' });
+  if (!sent) addMessage(state.currentSession, 'assistant', '[Not connected to daemon — WebSocket offline]', '');
+  else showTyping(state.currentSession);
+}
+
+// ── Agents ────────────────────────────────────────────────────────
+function renderAgents() {
+  const tbody = document.getElementById('agents-tbody');
+  if (!state.agents.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;color:#4b5563">No agents found. Check ~/.cato/ directory.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = state.agents.map(a => `<tr>
+    <td style="color:#e2e8f0;font-weight:500">${esc(a.id)}</td>
+    <td><code style="color:#93c5fd;font-size:12px">${esc(a.workspace)}</code></td>
+    <td>${a.files}</td>
+    <td><span class="badge badge-green">Active</span></td>
+  </tr>`).join('');
+}
+
+// ── Skills ────────────────────────────────────────────────────────
+function renderSkills() {
+  const grid = document.getElementById('skills-grid');
+  document.getElementById('skills-count').textContent = state.skills.length + ' skills installed';
+  if (!state.skills.length) {
+    grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#127381;</div><p>No skills installed. Click "Install Skill" to add one.</p></div>';
+    return;
+  }
+  grid.innerHTML = state.skills.map((s, i) => `<div class="skill-card" onclick="openSkillPanel(${i})">
+    <div class="skill-card-name">${esc(s.name)}</div>
+    <div class="skill-card-desc">${esc(s.description)}</div>
+    <div class="skill-card-footer">
+      <span class="skill-version">${esc(s.version || '—')}</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openSkillPanel(${i})">View</button>
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteSkill(${i})">Delete</button>
+      </div>
+    </div>
+  </div>`).join('');
+}
+
+function openSkillPanel(idx) {
+  const s = state.skills[idx];
+  document.getElementById('skill-panel-title').textContent = s.name;
+  document.getElementById('skill-panel-body').textContent = s.content || '(No SKILL.md content)';
+  document.getElementById('skill-panel').style.transform = 'translateX(0)';
+}
+
+function closeSkillPanel() {
+  document.getElementById('skill-panel').style.transform = 'translateX(100%)';
+}
+
+function deleteSkill(idx) {
+  if (!confirm('Delete skill "' + state.skills[idx].name + '"?')) return;
+  state.skills.splice(idx, 1);
+  renderSkills();
+}
+
+function openInstallModal()  { document.getElementById('install-modal').style.display = 'flex'; }
+function closeInstallModal() { document.getElementById('install-modal').style.display = 'none'; }
+
+function switchInstallTab(tab) {
+  document.getElementById('install-git-tab').style.display    = tab === 'git'    ? '' : 'none';
+  document.getElementById('install-upload-tab').style.display = tab === 'upload' ? '' : 'none';
+  document.getElementById('tab-git').classList.toggle('active',    tab === 'git');
+  document.getElementById('tab-upload').classList.toggle('active', tab === 'upload');
+}
+
+function installSkillGit() {
+  const url = document.getElementById('skill-git-url').value.trim();
+  if (!url) return;
+  wsSend({ type: 'skill_install', url });
+  appendAlert('info', 'Skill install requested: ' + url);
+  closeInstallModal();
+}
+
+function handleSkillDrop(e) {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f) readSkillFile(f);
+}
+
+function handleSkillFile(input) { if (input.files[0]) readSkillFile(input.files[0]); }
+
+function readSkillFile(f) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const content = e.target.result;
+    const name = f.name.replace('.md','');
+    state.skills.push({ name, description: 'Uploaded skill', version: 'local', content });
+    renderSkills(); closeInstallModal();
+    appendAlert('info', 'Skill "' + name + '" installed from upload.');
+  };
+  reader.readAsText(f);
+  document.getElementById('skill-file-name').textContent = 'Selected: ' + f.name;
+}
+
+// ── Cron ──────────────────────────────────────────────────────────
+function toggleCronForm() {
+  const f = document.getElementById('cron-add-form');
+  f.classList.toggle('open');
+}
+
+function renderCron() {
+  const tbody = document.getElementById('cron-tbody');
+  if (!state.cronJobs.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px;color:#4b5563">No cron jobs configured.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = state.cronJobs.map((c, i) => {
+    const lastRun = c.lastRun ? new Date(c.lastRun).toLocaleString() : 'Never';
+    const nextRun = c.nextRun ? new Date(c.nextRun).toLocaleString() : 'Unknown';
+    return `<tr>
+      <td><span class="cron-schedule-tag">${esc(c.schedule)}</span></td>
+      <td style="color:#93c5fd">${esc(c.agent || 'default')}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#64748b">${esc(c.prompt)}</td>
+      <td style="font-size:12px;color:#4b5563">${lastRun}</td>
+      <td style="font-size:12px;color:#4b5563">${nextRun}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-secondary btn-sm" onclick="runCronNow(${i})">Run Now</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteCron(${i})">&#128465;</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function saveCron() {
+  const sched  = document.getElementById('cron-schedule').value.trim();
+  const agent  = document.getElementById('cron-agent').value.trim() || 'default';
+  const prompt = document.getElementById('cron-prompt').value.trim();
+  if (!sched || !prompt) { alert('Schedule and prompt are required.'); return; }
+  const job = { id: 'cron-' + Date.now(), schedule: sched, agent, prompt, lastRun: null, nextRun: Date.now() + 60000 };
+  state.cronJobs.push(job);
+  wsSend({ type: 'cron_add', job });
+  toggleCronForm();
+  ['cron-schedule','cron-agent','cron-prompt'].forEach(id => document.getElementById(id).value = '');
+  renderCron();
+}
+
+function runCronNow(idx) {
+  const job = state.cronJobs[idx];
+  wsSend({ type: 'cron_run', cron_id: job.id });
+  appendAlert('info', 'Cron job triggered: ' + job.schedule);
+  job.lastRun = Date.now();
+  renderCron();
+}
+
+function deleteCron(idx) {
+  if (!confirm('Delete this cron job?')) return;
+  const job = state.cronJobs.splice(idx, 1)[0];
+  wsSend({ type: 'cron_delete', cron_id: job.id });
+  renderCron();
+}
+
+// ── Sessions page (overview) ──────────────────────────────────────
+function renderSessionsPage() {
+  const tbody = document.getElementById('sessions-tbody');
+  const ids = Object.keys(state.sessions);
+  if (!ids.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px;color:#4b5563">No active sessions.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = ids.map(id => {
+    const s = state.sessions[id];
+    const ts = s.lastActivity ? new Date(s.lastActivity).toLocaleString() : '—';
+    const ch = id.includes('tg') ? 'Telegram' : id.includes('wa') ? 'WhatsApp' : 'Web';
+    return `<tr>
+      <td style="color:#e2e8f0;font-weight:500;font-family:'Consolas',monospace;font-size:12px">${esc(id)}</td>
+      <td><span class="badge badge-blue">${ch}</span></td>
+      <td>0</td>
+      <td style="font-size:12px;color:#64748b">${ts}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="killSession('${esc(id)}',event)">Kill</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function updateSessionsFromServer(sessions) {
+  sessions.forEach(s => {
+    if (!state.sessions[s.id]) state.sessions[s.id] = { messages: [], lastActivity: s.lastActivity };
+    else state.sessions[s.id].lastActivity = s.lastActivity;
+  });
+  if (state.currentPage === 'chat') renderSessions();
+  if (state.currentPage === 'sessions') renderSessionsPage();
+}
+
+// ── Usage ─────────────────────────────────────────────────────────
+function setUsagePeriod(p, btn) {
+  state.usagePeriod = p;
+  document.querySelectorAll('.usage-period').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderUsage();
+}
+
+function renderUsage() {
+  const data = getSampleUsageData();
+  const bars = document.getElementById('usage-bars');
+  const maxCalls = Math.max(...data.map(d => d.calls), 1);
+  bars.innerHTML = data.map(d => `<div class="usage-bar-row">
+    <span class="usage-bar-label">${esc(d.model)}</span>
+    <div class="usage-bar-wrap"><div class="usage-bar-fill" style="width:${Math.round(d.calls/maxCalls*100)}%"></div></div>
+    <span class="usage-bar-val">${d.calls}</span>
+  </div>`).join('');
+  const tbody = document.getElementById('usage-tbody');
+  tbody.innerHTML = data.map(d => `<tr>
+    <td style="color:#e2e8f0">${esc(d.model)}</td>
+    <td>${d.calls}</td>
+    <td>${(d.inputTokens/1000).toFixed(1)}K</td>
+    <td>${(d.outputTokens/1000).toFixed(1)}K</td>
+    <td style="color:#22c55e">$${d.cost.toFixed(4)}</td>
+  </tr>`).join('');
+  const total = data.reduce((s, d) => s + d.cost, 0);
+  document.getElementById('usage-total-cost').textContent = '$' + total.toFixed(4);
+}
+
+function getSampleUsageData() {
+  // Returns zeros when not connected — real data comes via WS events
+  return state.modelPricing.map(m => ({
+    model: m.model, calls: m.calls || 0,
+    inputTokens: m.inputTokens || 0, outputTokens: m.outputTokens || 0, cost: m.used || 0,
+  }));
+}
+
+// ── Logs ──────────────────────────────────────────────────────────
+function appendLog(level, text) {
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  state.allLogs.push({ level: level.toUpperCase(), text, ts });
+  if (state.allLogs.length > 500) state.allLogs.shift();
+  if (state.currentPage === 'logs') filterLogs();
+}
+
+function filterLogs() {
+  const filter = (document.getElementById('log-filter')?.value || '').toLowerCase();
+  const out    = document.getElementById('log-output');
+  if (!out) return;
+  const visible = state.allLogs.filter(l =>
+    !filter || l.text.toLowerCase().includes(filter) || l.level.toLowerCase().includes(filter));
+  out.innerHTML = visible.slice(-200).map(l =>
+    `<div class="log-line log-${l.level}"><span style="color:#374151">[${l.ts}]</span> <span style="font-weight:600">${l.level.padEnd(5)}</span> ${esc(l.text)}</div>`
+  ).join('');
+  const autoScroll = document.getElementById('log-autoscroll');
+  if (!autoScroll || autoScroll.checked) out.scrollTop = out.scrollHeight;
+}
+
+function clearLogs() {
+  state.allLogs = [];
+  document.getElementById('log-output').innerHTML = '';
+}
+
+// Subscribe to log stream via WS
+function subscribeToLogs() { wsSend({ type: 'subscribe_logs' }); }
+
+// ── Config ────────────────────────────────────────────────────────
+function renderConfig() {
+  const fields = document.getElementById('cfg-fields');
+  const raw    = document.getElementById('cfg-raw-json');
+  const cfg    = state.config;
+  const keys   = Object.keys(cfg);
+  if (!keys.length) {
+    fields.innerHTML = '<div style="color:#4b5563;font-size:13px">Config not loaded. Daemon may be offline.</div>';
+    raw.value = '{}';
+    return;
+  }
+  fields.innerHTML = keys.map(k => {
+    const v = cfg[k];
+    const inputType = typeof v === 'number' ? 'number' : 'text';
+    return `<div class="form-group">
+      <label class="form-label">${esc(k)}</label>
+      <input class="form-input" type="${inputType}" id="cfg-field-${esc(k)}" value="${esc(String(v))}">
+    </div>`;
+  }).join('');
+  raw.value = JSON.stringify(cfg, null, 2);
+}
+
+function switchConfig(mode) {
+  const formView = document.getElementById('cfg-form-view');
+  const rawView  = document.getElementById('cfg-raw-view');
+  const formBtn  = document.getElementById('cfg-form-btn');
+  const rawBtn   = document.getElementById('cfg-raw-btn');
+  if (mode === 'form') {
+    formView.style.display = ''; rawView.style.display = 'none';
+    formBtn.classList.add('active'); rawBtn.classList.remove('active');
+  } else {
+    formView.style.display = 'none'; rawView.style.display = '';
+    formBtn.classList.remove('active'); rawBtn.classList.add('active');
+  }
+}
+
+async function saveConfig() {
+  const rawEl  = document.getElementById('cfg-raw-json');
+  const isRaw  = document.getElementById('cfg-raw-view').style.display !== 'none';
+  let payload;
+  if (isRaw) {
+    try { payload = JSON.parse(rawEl.value); }
+    catch { alert('Invalid JSON'); return; }
+  } else {
+    payload = { ...state.config };
+    Object.keys(state.config).forEach(k => {
+      const el = document.getElementById('cfg-field-' + k);
+      if (el) payload[k] = el.type === 'number' ? Number(el.value) : el.value;
+    });
+  }
+  try {
+    const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (r.ok) { state.config = payload; appendAlert('info', 'Config saved.'); }
+    else appendAlert('error', 'Config save failed: ' + r.status);
+  } catch (_) { appendAlert('error', 'Config save failed — daemon offline.'); }
+}
+
+// ── Budget ────────────────────────────────────────────────────────
+function renderBudget() {
+  document.getElementById('budget-monthly').value = state.budget.monthly;
+  document.getElementById('budget-session').value  = state.budget.session;
+  const spent  = state.budget.spent || 0;
+  const cap    = state.budget.monthly || 25;
+  const pct    = Math.min(Math.round(spent / cap * 100), 100);
+  document.getElementById('budget-spent-label').textContent = '$' + spent.toFixed(2) + ' spent';
+  document.getElementById('budget-cap-label').textContent   = 'of $' + cap.toFixed(2);
+  document.getElementById('budget-pct-label').textContent   = pct + '%';
+  const gauge = document.getElementById('budget-gauge');
+  gauge.style.width = pct + '%';
+  gauge.className = 'progress-bar-fill' + (pct >= 90 ? ' danger' : pct >= 80 ? ' warn' : '');
+  const warn = document.getElementById('budget-warning');
+  const warnMsg = document.getElementById('budget-warning-msg');
+  if (pct >= 80) {
+    warn.style.display = 'flex';
+    warnMsg.textContent = `Warning: ${pct}% of monthly budget used ($${spent.toFixed(2)} of $${cap.toFixed(2)}). ` +
+      (pct >= 100 ? 'Budget cap reached — new requests will be blocked.' : 'Approaching limit.');
+  } else {
+    warn.style.display = 'none';
+  }
+  const tbody = document.getElementById('budget-model-tbody');
+  tbody.innerHTML = state.modelPricing.map(m => `<tr>
+    <td style="color:#e2e8f0">${esc(m.model)}</td>
+    <td style="color:#94a3b8">$${m.input.toFixed(2)}</td>
+    <td style="color:#94a3b8">$${m.output.toFixed(2)}</td>
+    <td style="color:#22c55e">$${(m.used||0).toFixed(4)}</td>
+  </tr>`).join('');
+}
+
+function saveBudget() {
+  state.budget.monthly = parseFloat(document.getElementById('budget-monthly').value) || 25;
+  state.budget.session = parseFloat(document.getElementById('budget-session').value) || 1;
+  wsSend({ type: 'set_budget', monthly: state.budget.monthly, session: state.budget.session });
+  appendAlert('info', `Budget updated: monthly=$${state.budget.monthly}, session=$${state.budget.session}`);
+  renderBudget();
+}
+
+// ── Alerts ────────────────────────────────────────────────────────
+function appendAlert(level, message) {
+  state.alerts.unshift({ level, message, ts: new Date().toLocaleTimeString(), id: Date.now() });
+  if (state.alerts.length > 200) state.alerts.pop();
+  const badge = document.getElementById('alert-badge');
+  const errors = state.alerts.filter(a => a.level === 'error').length;
+  if (errors > 0) { badge.style.display = ''; badge.textContent = errors; }
+  else { badge.style.display = 'none'; }
+  if (state.currentPage === 'alerts') renderAlerts();
+}
+
+function filterAlerts(level, btn) {
+  state.alertFilter = level;
+  document.querySelectorAll('.alert-filter').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderAlerts();
+}
+
+function renderAlerts() {
+  const list = document.getElementById('alerts-list');
+  const visible = state.alertFilter === 'all'
+    ? state.alerts
+    : state.alerts.filter(a => a.level === state.alertFilter);
+  document.getElementById('alerts-count').textContent = visible.length + ' notifications';
+  if (!visible.length) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128276;</div><p>No notifications.</p></div>';
+    return;
+  }
+  list.innerHTML = visible.map(a => {
+    const iconMap = { error: '&#128721;', warn: '&#9888;', info: '&#8505;' };
+    const badgeMap = { error: 'badge-red', warn: 'badge-yellow', info: 'badge-blue' };
+    return `<div class="notification">
+      <span class="notif-icon">${iconMap[a.level] || '&#8505;'}</span>
+      <div class="notif-body">
+        <span class="badge ${badgeMap[a.level] || 'badge-gray'}" style="margin-bottom:4px">${a.level.toUpperCase()}</span>
+        <div class="notif-msg">${esc(a.message)}</div>
+        <div class="notif-time">${a.ts}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="dismissAlert(${a.id})" title="Dismiss">&#10005;</button>
+    </div>`;
+  }).join('');
+}
+
+function dismissAlert(id) {
+  state.alerts = state.alerts.filter(a => a.id !== id);
+  renderAlerts();
+}
+
+function clearAlerts() { state.alerts = []; renderAlerts(); }
+
+// ── Onboarding Wizard ─────────────────────────────────────────────
+let wizardStep = 1;
+const TOTAL_STEPS = 4;
+
+function buildWizProgress(containerId, current) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = Array.from({ length: TOTAL_STEPS }, (_, i) => {
+    const n = i + 1;
+    const cls = n < current ? 'done' : n === current ? 'active' : '';
+    return `<div class="wizard-step-dot ${cls}" title="Step ${n}"></div>`;
+  }).join('') + `<span style="margin-left:8px;font-size:11px;color:#64748b">Step ${current} of ${TOTAL_STEPS}</span>`;
+}
+
+function showWizardStep(n) {
+  document.querySelectorAll('.wizard-step').forEach(el => el.classList.remove('active'));
+  const el = document.getElementById('wiz-step-' + n);
+  if (el) el.classList.add('active');
+  ['','2','3'].forEach(s => buildWizProgress('wiz-progress' + s, n));
+  wizardStep = n;
+}
+
+function wizNext() { if (wizardStep < TOTAL_STEPS) showWizardStep(wizardStep + 1); }
+function wizBack() { if (wizardStep > 1) showWizardStep(wizardStep - 1); }
+
+function setWizBudget(v) {
+  document.getElementById('wiz-budget').value = v;
+  document.querySelectorAll('.preset-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.textContent.replace('$','')) === v);
+  });
+}
+
+function wizSaveTg() {
+  const token = document.getElementById('wiz-tg-token').value.trim();
+  if (token) wsSend({ type: 'set_telegram_token', token });
+  wizNext();
+}
+
+function dismissOnboarding() {
+  document.getElementById('onboarding-overlay').style.display = 'none';
+  localStorage.setItem('cato_onboarded', '1');
+  state.onboardingDone = true;
+}
+
+function maybeShowOnboarding() {
+  const done = localStorage.getItem('cato_onboarded');
+  if (!done) {
+    document.getElementById('onboarding-overlay').style.display = 'flex';
+    showWizardStep(1);
+  }
+}
+
+// ── Global search (Cmd+K / Ctrl+K) ───────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault();
+    document.getElementById('search-input').focus();
+  }
+  if (e.key === 'Escape') {
+    closeSkillPanel();
+    closeInstallModal();
+    document.getElementById('search-input').blur();
+  }
+});
+
+document.getElementById('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+document.getElementById('chat-input').addEventListener('input', function() {
+  this.style.height = '40px';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// ── Utility ───────────────────────────────────────────────────────
+function esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── Health polling ────────────────────────────────────────────────
+function pollHealth() {
+  fetch('/health').then(r => r.json()).then(d => {
+    setHealth(d.status === 'ok', d);
+  }).catch(() => setHealth(false));
+}
+
+// ── Periodic health check via REST (fallback when WS is down) ────
+setInterval(pollHealth, 15000);
+
+// ── Boot ──────────────────────────────────────────────────────────
+function boot() {
+  // Parse hash for initial page
+  const hash = window.location.hash.replace('#', '') || 'chat';
+  navigate(hash);
+  connectWS();
+  pollHealth();
+  maybeShowOnboarding();
+
+  // Seed demo session so chat doesn't feel empty
+  if (!Object.keys(state.sessions).length) {
+    state.sessions['web:default'] = { messages: [], lastActivity: Date.now() };
+    state.currentSession = 'web:default';
+  }
+
+  // Populate demo config fields so config page isn't blank
+  state.config = {
+    agent_name: 'cato',
+    context_budget_tokens: 8000,
+    model: 'claude-3-5-sonnet-20241022',
+    temperature: 0.3,
+    monthly_budget_usd: 25,
+  };
+
+  appendLog('INFO', 'Cato dashboard loaded');
+}
+
+window.addEventListener('hashchange', () => {
+  const page = window.location.hash.replace('#', '') || 'chat';
+  navigate(page);
+});
+
+window.addEventListener('DOMContentLoaded', boot);
+</script>
+</body>
+</html>
