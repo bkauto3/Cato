@@ -20,6 +20,8 @@ from typing import Any, Optional
 
 from .budget import BudgetExceeded, BudgetManager
 from .config import CatoConfig
+from .heartbeat import HeartbeatMonitor
+from .node import NodeManager
 from .platform import get_data_dir
 from .vault import Vault
 
@@ -93,6 +95,10 @@ class Gateway:
         # Lock guards lazy agent-loop initialization (first message triggers it)
         self._agent_loop_lock: asyncio.Lock = asyncio.Lock()
         self._agent_loop_initializing: bool = False
+        # Node manager for remote device capability registration
+        self._nodes: NodeManager = NodeManager()
+        # Heartbeat monitor (set in start())
+        self._heartbeat_monitor: Optional[HeartbeatMonitor] = None
 
     def register_adapter(self, adapter: Any) -> None:
         """Register a channel adapter (must expose start/stop/send)."""
@@ -123,6 +129,10 @@ class Gateway:
             )
         self._bg_tasks.append(asyncio.create_task(self._run_websocket_server(), name="websocket-server"))
         self._bg_tasks.append(asyncio.create_task(self._run_cron_scheduler(), name="cron-scheduler"))
+        # Heartbeat monitor — checks HEARTBEAT.md for every agent on a schedule
+        hb_monitor = HeartbeatMonitor(self, _CATO_DIR)
+        self._bg_tasks.append(asyncio.create_task(hb_monitor.run_forever(), name="heartbeat-monitor"))
+        self._heartbeat_monitor = hb_monitor
         logger.info("Gateway started — ws://%s:%d", _WS_HOST, _WS_PORT)
 
     async def _start_adapter(self, adapter: Any) -> None:
@@ -165,10 +175,11 @@ class Gateway:
 
     async def send(self, session_id: str, text: str, channel: str) -> None:
         """Called by agent loop to deliver a response to the originating channel."""
-        if channel == "web":
+        if channel in ("web", "cron", "heartbeat"):
             await self._ws_broadcast({
                 "type": "response", "session_id": session_id,
                 "text": text, "cost_footer": self._budget.format_footer(),
+                "channel": channel,
             })
             return
         for adapter in self._adapters:
@@ -240,6 +251,7 @@ class Gateway:
                 pass
             finally:
                 self._ws_clients.discard(ws)
+                self._nodes.remove_by_ws(ws)
 
         ws_port = getattr(self._cfg, "webchat_port", None) or _WS_PORT
         ws_port = ws_port + 1  # HTTP uses webchat_port, WS uses webchat_port+1
@@ -258,6 +270,14 @@ class Gateway:
             await ws.send(json.dumps({"type": "error", "text": "invalid JSON"}))
             return
         msg_type = data.get("type", "message")
+
+        # Route node-protocol messages to NodeManager
+        if msg_type.startswith("node_"):
+            reply = await self._nodes.handle_message(ws, data)
+            if reply is not None:
+                await ws.send(json.dumps(reply))
+            return
+
         if msg_type == "health":
             await ws.send(json.dumps({
                 "type": "health", "status": "ok",

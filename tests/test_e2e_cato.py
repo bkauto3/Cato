@@ -363,36 +363,38 @@ class TestConduitBridgeE2E:
     """End-to-end tests for the ConduitBridge budget enforcement and ledger."""
 
     def test_budget_exceeded_error_raised(self, tmp_path):
-        """Budget enforcement: pre-seeded ledger + one more charge raises BudgetExceededError."""
+        """Budget enforcement: pre-seeded ledger over cap raises BudgetExceededError."""
         from cato.tools.conduit_bridge import (
-            ConduitBridge, ConduitBillingLedger, BudgetExceededError
+            ConduitBridge, ConduitBillingLedger, BudgetExceededError, ACTION_COSTS
         )
 
         db = tmp_path / "cato.db"
         session = "budget-e2e-test"
-        budget = 10  # 10 cents
+        budget = 5  # 5 cents
 
-        # Pre-seed ledger: 9 cents already spent
+        # Pre-seed ledger with 5 cents already spent (at the cap)
         ledger = ConduitBillingLedger(db_path=db)
         ledger.connect()
-        ledger.record(session, "navigate", 5, "https://a.com")
+        ledger.record(session, "navigate", 3, "https://a.com")
         ledger.record(session, "extract", 2, "body")
-        ledger.record(session, "screenshot", 2, "")
 
-        # 9 cents spent; bridge budget is 10; a navigate (1 cent) should succeed,
-        # but a screenshot (5 cents) should fail
         bridge = ConduitBridge(
             {"conduit_budget_per_session": budget, "data_dir": str(tmp_path)},
             session
         )
-        bridge.ledger = ledger
+        bridge._ledger = ledger
 
         # Verify current total via ledger
-        assert ledger.session_total_cents(session) == 9
+        assert ledger.session_total_cents(session) == 5
 
-        # A 5-cent screenshot would bring total to 14, exceeding budget of 10 → should raise
-        with pytest.raises(BudgetExceededError):
-            bridge._charge("screenshot")  # 5 cents, would be 9+5=14 > 10
+        # Manually inject a cost into ACTION_COSTS temporarily so _audit raises
+        original_costs = dict(ACTION_COSTS)
+        ACTION_COSTS["navigate"] = 1  # 5 + 1 = 6 > 5 budget → should raise
+        try:
+            with pytest.raises(BudgetExceededError):
+                bridge._audit("navigate", {"url": "https://b.com"}, {})
+        finally:
+            ACTION_COSTS.update(original_costs)
 
     def test_ledger_session_total_cents(self, tmp_path):
         """ConduitBillingLedger.session_total_cents() sums correctly."""
@@ -436,10 +438,16 @@ class TestConduitBridgeE2E:
         assert len(sig) == 64, f"Ed25519 signature must be 64 bytes, got {len(sig)}"
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not __import__("os").environ.get("CATO_LIVE_TESTS"),
+        reason="Live browser tests disabled — set CATO_LIVE_TESTS=1 to enable",
+    )
     async def test_live_navigate_and_screenshot(self, tmp_path):
         """
         Live browser test: navigate to httpbin.org/get, verify JSON response,
         verify cost tracking, take screenshot with bytes > 1000.
+
+        Skipped unless CATO_LIVE_TESTS=1 environment variable is set.
         """
         from cato.tools.conduit_bridge import ConduitBridge, BudgetExceededError
 
@@ -466,9 +474,12 @@ class TestConduitBridgeE2E:
             assert "char_count" in extract_result, "extract() must return char_count"
             assert extract_result["char_count"] > 0, "Extracted content must be non-empty"
 
-            # Verify cost tracking: 1 (navigate) + 2 (extract) = 3 cents minimum
+            # Verify cost tracking: all actions have 0-cost in current model;
+            # cost must be within budget (not exceed it)
             cost = bridge.session_cost_cents
-            assert cost >= 3, f"Expected at least 3 cents after navigate+extract, got {cost}"
+            assert cost <= bridge._budget_cents, (
+                f"Cost {cost} exceeded budget {bridge._budget_cents}"
+            )
 
             # Screenshot: costs 5 cents
             screenshot_result = await bridge.screenshot()
@@ -501,11 +512,15 @@ class TestConduitBridgeE2E:
         )
         bridge.ledger = ledger
 
-        # 1 cent navigate on a 10-cent budget must not raise
-        bridge._charge("navigate", url_or_selector="https://example.com")
+        # Navigate with zero cost on a 10-cent budget must not raise
+        bridge._ledger = ledger
+        bridge._audit("navigate", {"url": "https://example.com"}, {}, url_or_selector="https://example.com")
 
+        # After _audit with 0-cost action, total should still be 0
         total = ledger.session_total_cents(session)
-        assert total == 1, f"Expected 1 cent after one navigate, got {total}"
+        assert total == 0, f"Expected 0 cents (zero-cost action), got {total}"
+        # And bridge.session_cost_cents must not exceed budget
+        assert bridge.session_cost_cents <= bridge._budget_cents
 
 
 # ===========================================================================

@@ -660,6 +660,442 @@ def cmd_receipt(session_id: str, fmt: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# cato cron  (schedule management)
+# ---------------------------------------------------------------------------
+
+@main.group("cron")
+def cron_cmd() -> None:
+    """Manage scheduled cron tasks for agents."""
+    pass
+
+
+@cron_cmd.command("add")
+@click.option("--schedule", required=True, help="Cron expression, e.g. '0 9 * * *'")
+@click.option("--prompt", required=True, help="Prompt to send to the agent.")
+@click.option("--agent", default="default", show_default=True, help="Agent workspace name.")
+@click.option("--announce/--no-announce", default=False, show_default=True,
+              help="Send a message to the channel when the cron fires.")
+@click.option("--session", "session_id", default="", help="Session ID (auto-generated if omitted).")
+@click.option("--channel", default="web", show_default=True,
+              help="Channel to deliver announced output to.")
+def cron_add(schedule: str, prompt: str, agent: str, announce: bool,
+             session_id: str, channel: str) -> None:
+    """Add a scheduled cron task for an agent.
+
+    \b
+    Example:
+        cato cron add --schedule "0 9 * * *" --agent personal \\
+                      --prompt "Summarise new emails" --announce
+    """
+    import json as _json, time as _time
+    try:
+        from croniter import croniter
+        if not croniter.is_valid(schedule):
+            safe_print(f"Invalid cron expression: {schedule!r}")
+            return
+    except ImportError:
+        safe_print("Warning: croniter not installed — schedule not validated. "
+                   "Install with: pip install croniter")
+
+    agent_dir = _CATO_DIR / "agents" / agent
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    crons_path = agent_dir / "CRONS.json"
+
+    crons: list[dict] = []
+    if crons_path.exists():
+        try:
+            crons = _json.loads(crons_path.read_text(encoding="utf-8"))
+        except Exception:
+            crons = []
+
+    sid = session_id or f"cron-{agent}-{int(_time.time())}"
+    entry = {
+        "schedule": schedule,
+        "prompt": prompt,
+        "agent_id": agent,
+        "session_id": sid,
+        "announce": announce,
+        "channel": channel,
+        "created_at": _time.time(),
+    }
+    crons.append(entry)
+    crons_path.write_text(_json.dumps(crons, indent=2, ensure_ascii=False), encoding="utf-8")
+    safe_print(f"Cron added for agent [{agent}]: {schedule!r} → {prompt!r}")
+    safe_print(f"  session_id: {sid}  announce: {announce}  total crons: {len(crons)}")
+
+
+@cron_cmd.command("list")
+@click.option("--agent", default="", help="Filter by agent (all agents if omitted).")
+def cron_list(agent: str) -> None:
+    """List all scheduled cron tasks."""
+    import json as _json
+
+    agents_dir = _CATO_DIR / "agents"
+    if not agents_dir.exists():
+        safe_print("No agents directory found.")
+        return
+
+    dirs = [agents_dir / agent] if agent else list(agents_dir.iterdir())
+    found_any = False
+
+    table = Table(title="Cron Schedule", show_lines=True)
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Agent", style="cyan")
+    table.add_column("Schedule")
+    table.add_column("Prompt")
+    table.add_column("Announce")
+    table.add_column("Session ID", style="dim")
+
+    for d in sorted(dirs):
+        if not d.is_dir():
+            continue
+        crons_path = d / "CRONS.json"
+        if not crons_path.exists():
+            continue
+        try:
+            crons = _json.loads(crons_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for i, entry in enumerate(crons):
+            found_any = True
+            table.add_row(
+                str(i),
+                d.name,
+                entry.get("schedule", ""),
+                entry.get("prompt", "")[:60],
+                "yes" if entry.get("announce") else "no",
+                entry.get("session_id", ""),
+            )
+
+    if found_any:
+        console.print(table)
+    else:
+        safe_print("No cron tasks found. Add one with: cato cron add")
+
+
+@cron_cmd.command("remove")
+@click.option("--agent", required=True, help="Agent workspace name.")
+@click.option("--index", required=True, type=int, help="Index from 'cato cron list'.")
+def cron_remove(agent: str, index: int) -> None:
+    """Remove a cron task by its list index."""
+    import json as _json
+
+    crons_path = _CATO_DIR / "agents" / agent / "CRONS.json"
+    if not crons_path.exists():
+        safe_print(f"No CRONS.json found for agent [{agent}].")
+        return
+
+    try:
+        crons: list[dict] = _json.loads(crons_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        safe_print(f"Could not read CRONS.json: {exc}")
+        return
+
+    if index < 0 or index >= len(crons):
+        safe_print(f"Index {index} out of range (0..{len(crons)-1}).")
+        return
+
+    removed = crons.pop(index)
+    crons_path.write_text(_json.dumps(crons, indent=2, ensure_ascii=False), encoding="utf-8")
+    safe_print(f"Removed cron #{index}: {removed.get('schedule')!r} → {removed.get('prompt')!r}")
+
+
+@cron_cmd.command("run")
+@click.option("--agent", required=True, help="Agent workspace name.")
+@click.option("--index", required=True, type=int, help="Index from 'cato cron list' (fires immediately).")
+def cron_run(agent: str, index: int) -> None:
+    """Fire a cron task immediately (one-shot, ignores schedule)."""
+    import json as _json, asyncio as _asyncio
+
+    crons_path = _CATO_DIR / "agents" / agent / "CRONS.json"
+    if not crons_path.exists():
+        safe_print(f"No CRONS.json found for agent [{agent}].")
+        return
+
+    try:
+        crons: list[dict] = _json.loads(crons_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        safe_print(f"Could not read CRONS.json: {exc}")
+        return
+
+    if index < 0 or index >= len(crons):
+        safe_print(f"Index {index} out of range (0..{len(crons)-1}).")
+        return
+
+    entry = crons[index]
+    safe_print(f"Firing cron #{index} for agent [{agent}]: {entry.get('prompt')!r}")
+
+    # Run via daemon if it's alive, otherwise run the agent loop directly
+    if not _PID_FILE.exists():
+        safe_print("Daemon not running — executing in-process (no channel delivery).")
+        _run_cron_in_process(entry, agent)
+    else:
+        safe_print("Daemon is running — injecting via WebSocket.")
+        _run_cron_via_ws(entry)
+
+
+def _run_cron_in_process(entry: dict, agent: str) -> None:
+    """Run a cron task in-process when the daemon is not running."""
+    import asyncio as _asyncio
+    from cato.config import CatoConfig as _Cfg
+    from cato.budget import BudgetManager as _BM
+    from cato.vault import Vault as _Vault
+    from cato.agent_loop import AgentLoop
+    from cato.core.context_builder import ContextBuilder
+    from cato.core.memory import MemorySystem
+
+    cfg = _Cfg.load()
+    vault_path = _CATO_DIR / "vault.enc"
+    vault = _Vault(vault_path=vault_path) if vault_path.exists() else None
+    budget = _BM(session_cap=cfg.session_cap, monthly_cap=cfg.monthly_cap)
+    memory = MemorySystem(agent_id=agent)
+    ctx = ContextBuilder(max_tokens=cfg.context_budget_tokens)
+    loop = AgentLoop(config=cfg, budget=budget, vault=vault, memory=memory, context_builder=ctx)
+
+    async def _run() -> None:
+        text, footer = await loop.run(
+            session_id=entry.get("session_id", f"cron-{agent}"),
+            message=entry.get("prompt", ""),
+            agent_id=agent,
+        )
+        safe_print(f"\n--- Cron result ---\n{text}\n{footer}")
+
+    try:
+        _asyncio.run(_run())
+    except Exception as exc:
+        safe_print(f"Cron run failed: {exc}")
+
+
+def _run_cron_via_ws(entry: dict) -> None:
+    """Inject a cron task into the running daemon via WebSocket."""
+    import asyncio as _asyncio, json as _json
+    try:
+        import websockets as _ws
+    except ImportError:
+        safe_print("websockets not installed — cannot inject via daemon. pip install websockets")
+        return
+
+    async def _send() -> None:
+        uri = "ws://127.0.0.1:18790"
+        try:
+            async with _ws.connect(uri) as ws:
+                payload = _json.dumps({
+                    "type": "message",
+                    "text": entry.get("prompt", ""),
+                    "session_id": entry.get("session_id", "cron-manual"),
+                    "agent_id": entry.get("agent_id", "default"),
+                    "channel": entry.get("channel", "web"),
+                })
+                await ws.send(payload)
+                safe_print("Cron task injected into running daemon.")
+        except Exception as exc:
+            safe_print(f"Could not reach daemon WebSocket: {exc}")
+
+    _asyncio.run(_send())
+
+
+# ---------------------------------------------------------------------------
+# cato node
+# ---------------------------------------------------------------------------
+
+@main.group("node")
+def node_cmd() -> None:
+    """Manage remote node devices and their capabilities."""
+    pass
+
+
+@node_cmd.command("list")
+def node_list() -> None:
+    """List currently registered nodes (requires daemon to be running)."""
+    import asyncio as _asyncio, json as _json
+
+    if not _PID_FILE.exists():
+        safe_print("Daemon is not running. Start with: cato start")
+        return
+
+    try:
+        import websockets as _ws
+    except ImportError:
+        safe_print("websockets not installed. pip install websockets")
+        return
+
+    async def _fetch() -> None:
+        uri = "ws://127.0.0.1:18790"
+        try:
+            async with _ws.connect(uri) as ws:
+                await ws.send(_json.dumps({"type": "node_list"}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                data = _json.loads(raw)
+                nodes = data.get("nodes", [])
+                if not nodes:
+                    safe_print("No nodes registered.")
+                    return
+                table = Table(title="Registered Nodes", show_lines=True)
+                table.add_column("Node ID", style="cyan")
+                table.add_column("Name")
+                table.add_column("Capabilities")
+                table.add_column("Last Seen")
+                table.add_column("Stale")
+                import time as _time
+                for n in nodes:
+                    age = int(_time.time() - n.get("last_seen", 0))
+                    caps = ", ".join(n.get("capabilities", []))
+                    table.add_row(
+                        n["node_id"], n["name"], caps,
+                        f"{age}s ago",
+                        "[red]yes[/red]" if n.get("stale") else "[green]no[/green]",
+                    )
+                console.print(table)
+        except Exception as exc:
+            safe_print(f"Could not reach daemon: {exc}")
+
+    _asyncio.run(_fetch())
+
+
+@node_cmd.command("info")
+def node_info() -> None:
+    """Show how to connect a remote node to this Cato instance."""
+    config = CatoConfig.load()
+    ws_port = (getattr(config, "webchat_port", None) or 8765) + 1
+
+    safe_print("\nCato Node Connection Info")
+    safe_print("=" * 50)
+    safe_print(f"WebSocket endpoint:  ws://127.0.0.1:{ws_port}")
+    safe_print("\nTo register a node, send this JSON over WebSocket:")
+    safe_print("""  {
+    "type": "node_register",
+    "node_id": "my-device",
+    "name": "My Device Name",
+    "capabilities": ["screenshot", "camera", "shell", "geolocation"]
+  }""")
+    safe_print("\nAvailable capability names (examples):")
+    safe_print("  screenshot   — take a screen capture")
+    safe_print("  camera       — take a photo via webcam")
+    safe_print("  geolocation  — return GPS/IP location")
+    safe_print("  shell        — run a shell command on the remote device")
+    safe_print("  file_read    — read a file from the remote device")
+    safe_print("  file_write   — write a file to the remote device")
+    safe_print("\nSee docs/nodes.md for the full node client protocol.")
+    safe_print("")
+
+
+# ---------------------------------------------------------------------------
+# cato heartbeat
+# ---------------------------------------------------------------------------
+
+@main.group("heartbeat")
+def heartbeat_cmd() -> None:
+    """Manage heartbeat health-check monitoring."""
+    pass
+
+
+@heartbeat_cmd.command("status")
+@click.option("--agent", default="", help="Filter by agent (all agents if omitted).")
+def heartbeat_status(agent: str) -> None:
+    """Show heartbeat configuration for agents."""
+    from cato.heartbeat import _parse_heartbeat_md
+
+    agents_dir = _CATO_DIR / "agents"
+    if not agents_dir.exists():
+        safe_print("No agents directory found.")
+        return
+
+    dirs = [agents_dir / agent] if agent else list(agents_dir.iterdir())
+    found_any = False
+
+    table = Table(title="Heartbeat Status", show_lines=True)
+    table.add_column("Agent", style="cyan")
+    table.add_column("HEARTBEAT.md", style="green")
+    table.add_column("Interval", justify="right")
+    table.add_column("Items", justify="right")
+    table.add_column("Checklist Preview")
+
+    for d in sorted(dirs):
+        if not d.is_dir():
+            continue
+        hb_path = d / "workspace" / "HEARTBEAT.md"
+        if not hb_path.exists():
+            hb_path = d / "HEARTBEAT.md"
+
+        if hb_path.exists():
+            interval, items = _parse_heartbeat_md(hb_path)
+            preview = items[0][:50] if items else "(no items)"
+            table.add_row(d.name, "found", f"{interval}s", str(len(items)), preview)
+            found_any = True
+        else:
+            table.add_row(d.name, "[dim]not found[/dim]", "-", "0", "")
+            found_any = True
+
+    if found_any:
+        console.print(table)
+    else:
+        safe_print("No agents found.")
+
+
+@heartbeat_cmd.command("run")
+@click.option("--agent", required=True, help="Agent name to fire heartbeat for.")
+def heartbeat_run(agent: str) -> None:
+    """Fire a heartbeat check immediately for an agent (in-process, no daemon needed)."""
+    from cato.heartbeat import _parse_heartbeat_md, _build_heartbeat_prompt
+
+    # Look for HEARTBEAT.md
+    agent_dir = _CATO_DIR / "agents" / agent
+    hb_path = agent_dir / "workspace" / "HEARTBEAT.md"
+    if not hb_path.exists():
+        hb_path = agent_dir / "HEARTBEAT.md"
+        if not hb_path.exists():
+            safe_print(f"No HEARTBEAT.md found for agent [{agent}].")
+            safe_print(f"  Expected: {agent_dir / 'workspace' / 'HEARTBEAT.md'}")
+            return
+
+    _, items = _parse_heartbeat_md(hb_path)
+    if not items:
+        safe_print("HEARTBEAT.md found but contains no checklist items (- [ ] ...).")
+        return
+
+    safe_print(f"Running heartbeat for [{agent}] — {len(items)} items:")
+    for item in items:
+        safe_print(f"  - {item}")
+
+    prompt = _build_heartbeat_prompt(agent, items)
+    entry = {
+        "prompt": prompt,
+        "session_id": f"heartbeat-{agent}-manual",
+    }
+    _run_cron_in_process(entry, agent)
+
+
+@heartbeat_cmd.command("init")
+@click.option("--agent", required=True, help="Agent name.")
+@click.option("--interval", default=300, show_default=True,
+              help="Check interval in seconds.")
+def heartbeat_init(agent: str, interval: int) -> None:
+    """Create a starter HEARTBEAT.md for an agent."""
+    agent_dir = _CATO_DIR / "agents" / agent / "workspace"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    hb_path = agent_dir / "HEARTBEAT.md"
+
+    if hb_path.exists():
+        if not click.confirm(f"HEARTBEAT.md already exists for [{agent}]. Overwrite?", default=False):
+            safe_print("Aborted.")
+            return
+
+    template = f"""# Heartbeat Checklist
+<!-- interval: {interval} -->
+
+Check the following items and report any failures:
+
+- [ ] Confirm the agent process is responding normally
+- [ ] Check available disk space is above 15%
+- [ ] Verify no error logs in the last check period
+- [ ] Confirm all configured channels are reachable
+"""
+    hb_path.write_text(template, encoding="utf-8")
+    safe_print(f"HEARTBEAT.md created at: {hb_path}")
+    safe_print(f"Interval: every {interval}s  |  Edit to add your own checklist items.")
+
+
+# ---------------------------------------------------------------------------
 # cato replay
 # ---------------------------------------------------------------------------
 

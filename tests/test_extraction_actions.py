@@ -18,6 +18,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # ---------------------------------------------------------------------------
 
 def _make_pkg_stub(name):
+    # Only inject if the real package is not already loaded — prevents
+    # polluting sys.modules when running alongside other tests.
+    if name in sys.modules:
+        return sys.modules[name]
     mod = types.ModuleType(name)
     sys.modules[name] = mod
     return mod
@@ -27,7 +31,8 @@ _conduit_pkg = _make_pkg_stub("cato")
 _tools_pkg   = _make_pkg_stub("cato.tools")
 
 _platform_mod = _make_pkg_stub("cato.platform")
-_platform_mod.get_data_dir = lambda: Path.home() / ".cato_test"
+if not hasattr(_platform_mod, "get_data_dir"):
+    _platform_mod.get_data_dir = lambda: Path.home() / ".cato_test"
 
 # Prevent _PROFILE_DIR etc from being created during import
 with patch("pathlib.Path.mkdir", return_value=None):

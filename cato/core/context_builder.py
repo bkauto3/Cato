@@ -32,8 +32,9 @@ _PRIORITY_STACK: list[tuple[str, bool]] = [
     ("IDENTITY.md", True),
     ("AGENTS.md",   True),
     ("USER.md",     True),
-    ("TOOLS.md",    True),
-    ("MEMORY.md",   False),
+    ("TOOLS.md",      True),
+    ("HEARTBEAT.md",  True),   # Periodic check checklist — loaded when present
+    ("MEMORY.md",     False),
     # Daily log and retrieved chunks are injected programmatically below
 ]
 

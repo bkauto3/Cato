@@ -76,3 +76,4 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+norecursedirs = [".git", ".tox", "dist", "build", "*.egg", ".venv", "venv", ".claude", "node_modules"]
