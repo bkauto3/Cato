@@ -8,6 +8,7 @@
 - **Hard budget caps** — session cap ($1.00) and monthly cap ($20.00) enforced before every LLM call; raises `BudgetExceeded` before your card is charged
 - **Auditable in an afternoon** — ~3,000 lines across 6 core modules, fully type-hinted, zero magic
 - **One-command migration** — `cato migrate --from-openclaw` copies your OpenClaw / ClawdBot / MoltBot workspaces and validates SKILL.md compatibility instantly
+- **Conduit headless browser** — cryptographically signed audit trail, VOIX protocol, Ed25519 agent identity, SHA-256 hash-chained action log — no other local AI daemon comes close
 
 ---
 
@@ -128,6 +129,94 @@ Or enable interactively during `cato init`.
 5. Routing itself costs $0.00
 
 When SwarmSync is disabled (the default), Cato uses `default_model` from config.yaml for every call.
+
+---
+
+## Conduit — The Headless Browser Engine Nothing Else Has
+
+Conduit is Cato's built-in headless browser engine. It is **on by default** and replaces every other agent browser integration you've seen. No other local AI daemon — not OpenClaw, not ClawdBot, not MoltBot, not AutoGPT, not AgentGPT, not anything — ships with what Conduit ships with out of the box.
+
+```yaml
+# Already enabled by default in your config
+conduit_enabled: true
+```
+
+### What makes Conduit different
+
+#### 1. Cryptographic Agent Identity (Ed25519)
+Every Cato instance generates a unique **Ed25519 keypair** on first run, stored at `{data_dir}/conduit_identity.key`. Every browser session is cryptographically tied to that identity. You can prove *which agent* performed *which action* at *which time* — forever.
+
+No other headless browser integration for local AI agents does this.
+
+#### 2. SHA-256 Hash-Chained Audit Log
+Every browser action — navigate, click, type, extract, screenshot — is written to an **append-only, SHA-256 hash-chained audit log** in SQLite. Each row's hash includes the previous row's hash, making the entire chain tamper-evident. If anyone modifies or deletes a row, `cato audit --verify` detects it instantly.
+
+```bash
+cato audit --session <id>      # full action-by-action replay
+cato audit --verify            # tamper detection across all sessions
+cato receipt --session <id>    # signed fare receipt with line-item log
+```
+
+This is the same pattern used in blockchain and financial audit systems — brought to your local AI agent browser.
+
+#### 3. VOIX Protocol Support
+Conduit automatically strips **VOIX `<tool>` and `<context>` tags** from all extracted page content before it reaches the agent. Pages built for agent consumption using the VOIX protocol are cleaned and normalized automatically — your agent never sees raw protocol tags in its context window.
+
+#### 4. Budget-Enforced Browser Actions
+Every browser action is checked against the session budget cap **before** it executes. If the action would exceed your cap, it raises `BudgetExceededError` and stops — it never executes the action first and asks forgiveness later. OpenClaw / ClawdBot / MoltBot have no browser budget enforcement at all.
+
+```json
+{"error": "Conduit budget 100¢ would be exceeded", "budget_exceeded": true}
+```
+
+#### 5. Sensitive Input Redaction
+Before any browser action is written to the audit log, Cato **automatically redacts** values whose keys match known sensitive patterns (`api_key`, `token`, `password`, `secret`, `authorization`, `bearer`, `credential`, etc.). Your keystrokes into password fields never appear in the audit trail.
+
+#### 6. Safety Gate Integration
+Conduit is fully wired into Cato's **reversibility safety gate**. Actions are classified by risk tier before execution:
+
+| Action | Risk Tier | Requires Confirmation |
+|--------|-----------|----------------------|
+| `navigate`, `extract`, `screenshot` | READ | Never |
+| `click`, `type` | REVERSIBLE_WRITE | Never |
+| Form submissions that send data externally | HIGH_STAKES | Yes (strict mode) |
+
+In daemon mode (no TTY), HIGH_STAKES actions fail safe — denied by default, logged with reason.
+
+#### 7. Free for Local Use
+Unlike Conduit's commercial deployment in SwarmSync (where per-action billing enables cost attribution across multi-tenant agent fleets), **all Conduit actions in Cato are free**. The full audit trail, identity signing, and VOIX support run at zero cost. The billing infrastructure is present in the codebase for SwarmSync compatibility but all costs are zeroed.
+
+#### 8. Zero External Dependencies for Browser Automation
+Conduit uses **Patchright** (a stealth Playwright fork) under the hood — one `patchright install chromium` and you're done. No Selenium server. No WebDriver binary management. No Docker container for the browser. No remote browser API. The browser runs locally, the audit log stays local, the identity key never leaves your machine.
+
+### Conduit vs everything else
+
+| Feature | Conduit (Cato) | OpenClaw browser | AutoGPT browser | AgentGPT | Playwright MCP |
+|---------|---------------|-----------------|-----------------|----------|----------------|
+| Ed25519 agent identity | ✅ | ❌ | ❌ | ❌ | ❌ |
+| SHA-256 hash-chained audit log | ✅ | ❌ | ❌ | ❌ | ❌ |
+| VOIX protocol stripping | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Budget enforcement before action | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Sensitive input redaction | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Tamper-evident audit trail | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Safety gate (reversibility tiers) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Signed receipts per session | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Free for local use | ✅ | ✅ | ✅ | ✅ | ✅ |
+| No external server required | ✅ | ❌ | ❌ | ❌ | ✅ |
+
+### Using Conduit
+
+Conduit exposes the same `browser` tool interface as before — nothing changes in how you write skills or prompts:
+
+```markdown
+# In any skill or agent prompt:
+Use browser.navigate to go to https://example.com
+Use browser.extract to get the page content
+Use browser.click on the "Submit" button
+Use browser.screenshot to capture the result
+```
+
+Every action is automatically logged, signed, and budget-checked. You get a full audit receipt at the end of every session with `cato receipt --session <id>`.
 
 ---
 

@@ -3,60 +3,62 @@
 **Capabilities:** browser.navigate, browser.click, browser.type, browser.extract, browser.screenshot
 
 ## Overview
-Conduit is the auditable browser engine built into Cato. Every browser action is
-logged to the audit trail. Billing is disabled for local Cato use — all actions are free.
+Conduit is Cato's built-in headless browser engine — enabled by default. Every browser action
+is logged to a SHA-256 hash-chained audit trail, signed with the agent's Ed25519 identity key,
+and enforced against the session budget cap before execution. All actions are free for local use.
 
 ## Activation
-Conduit is used automatically when `conduit_enabled: true` is set in `~/.cato/config.yaml`,
-or when Cato is started with `cato start --browser conduit`.
+Conduit is enabled by default (`conduit_enabled: true` in config.yaml). No flags needed.
 
 ## Instructions
 
 ### Navigating to a URL
 Use the `browser` tool with `action: navigate` and `url`:
-- Each navigation costs 1¢ and is logged to the audit trail
-- The URL is recorded in the billing ledger
+- Action is logged to the SHA-256 hash-chained audit trail with timestamp and session ID
 - VOIX `<tool>` and `<context>` tags are stripped from page content automatically
+- URL is recorded in the billing ledger (free for local use)
 
 ### Clicking elements
 Use `browser` with `action: click` and `selector` (CSS selector or XPath):
-- Costs 1¢ per click
 - Use specific selectors; avoid broad ones that might match multiple elements
+- Action logged and signed with agent Ed25519 identity
 
 ### Typing text
 Use `browser` with `action: type`, `selector`, and `text`:
-- Costs 1¢ per type action
+- Sensitive values (passwords, API keys) are automatically redacted in the audit log
 - Use for form inputs, search boxes, text areas
 
 ### Extracting page content
 Use `browser` with `action: extract` (optional `selector`, defaults to `body`):
-- Costs 2¢ per extraction
 - Returns `text` (cleaned content) and `char_count`
-- VOIX tags are stripped automatically
+- VOIX tags stripped automatically before content reaches the agent
 
 ### Taking screenshots
 Use `browser` with `action: screenshot` (optional `path` to save file):
-- Costs 5¢ — use sparingly
 - Returns a base64 image or saved file path
-
-## Budget Enforcement
-If a browser action would exceed the session budget cap, a `BudgetExceededError` is
-returned as JSON: `{"error": "...", "budget_exceeded": true}`. Stop and inform the user.
+- Logged to audit trail
 
 ## Audit Trail
-Every action is written to the append-only SHA-256 hash-chained audit log.
-Run `cato audit --session <id>` to review all browser actions taken in a session.
-Run `cato receipt --session <id>` for a signed fare receipt with line-item costs.
+Every action is written to the append-only SHA-256 hash-chained audit log in SQLite.
+Each row's hash includes the previous row — tamper-evident across the full session history.
 
-## Example Task: Research a topic
-1. `navigate` to a relevant starting URL (1¢)
-2. `extract` the page content (2¢) and summarize
-3. `click` a relevant link if needed (1¢)
-4. `extract` again (2¢) for more detail
-5. Total: 6¢ for a thorough research task
+```bash
+cato audit --session <id>   # full action-by-action replay
+cato audit --verify         # tamper detection across all sessions
+cato receipt --session <id> # signed receipt with line-item log
+```
 
 ## Safety
 - IRREVERSIBLE actions (form submissions that send data externally) require user confirmation
   when `safety_mode: strict` (default)
-- Screenshots of sensitive pages are flagged in the audit log
-- Budget cap is enforced before each action — no overruns possible
+- Non-interactive daemon mode: HIGH_STAKES actions denied by default (fail-safe)
+- Sensitive input keys (password, token, api_key, secret, bearer, etc.) auto-redacted in logs
+- Budget cap enforced before each action — action never executes if it would exceed cap
+
+## Example Task: Research a topic
+1. `navigate` to a starting URL
+2. `extract` the page content and summarize
+3. `click` a relevant link if needed
+4. `extract` again for more detail
+5. `screenshot` to capture the final state
+All steps logged, signed, and budget-checked automatically.
