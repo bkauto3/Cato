@@ -875,8 +875,11 @@ def _run_cron_via_ws(entry: dict) -> None:
         safe_print("websockets not installed — cannot inject via daemon. pip install websockets")
         return
 
+    _config = CatoConfig.load()
+    _ws_port = (getattr(_config, "webchat_port", None) or 8765) + 1
+
     async def _send() -> None:
-        uri = "ws://127.0.0.1:18790"
+        uri = f"ws://127.0.0.1:{_ws_port}"
         try:
             async with _ws.connect(uri) as ws:
                 payload = _json.dumps({
@@ -919,12 +922,15 @@ def node_list() -> None:
         safe_print("websockets not installed. pip install websockets")
         return
 
+    _config = CatoConfig.load()
+    _ws_port = (getattr(_config, "webchat_port", None) or 8765) + 1
+
     async def _fetch() -> None:
-        uri = "ws://127.0.0.1:18790"
+        uri = f"ws://127.0.0.1:{_ws_port}"
         try:
             async with _ws.connect(uri) as ws:
                 await ws.send(_json.dumps({"type": "node_list"}))
-                raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                raw = await _asyncio.wait_for(ws.recv(), timeout=5.0)
                 data = _json.loads(raw)
                 nodes = data.get("nodes", [])
                 if not nodes:
@@ -1035,7 +1041,12 @@ def heartbeat_status(agent: str) -> None:
 @heartbeat_cmd.command("run")
 @click.option("--agent", required=True, help="Agent name to fire heartbeat for.")
 def heartbeat_run(agent: str) -> None:
-    """Fire a heartbeat check immediately for an agent (in-process, no daemon needed)."""
+    """Fire a heartbeat check immediately for an agent.
+
+    If the daemon is running, injects via the gateway WebSocket so the response
+    is delivered through the configured channel.  Falls back to in-process
+    execution (stdout only) when the daemon is not running.
+    """
     from cato.heartbeat import _parse_heartbeat_md, _build_heartbeat_prompt
 
     # Look for HEARTBEAT.md
@@ -1061,8 +1072,16 @@ def heartbeat_run(agent: str) -> None:
     entry = {
         "prompt": prompt,
         "session_id": f"heartbeat-{agent}-manual",
+        "agent_id": agent,
+        "channel": "heartbeat",
     }
-    _run_cron_in_process(entry, agent)
+
+    # Prefer daemon injection so response flows through the gateway
+    if _PID_FILE.exists():
+        _run_cron_via_ws(entry)
+    else:
+        safe_print("(Daemon not running — executing in-process; output to stdout only)")
+        _run_cron_in_process(entry, agent)
 
 
 @heartbeat_cmd.command("init")

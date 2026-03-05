@@ -133,6 +133,8 @@ class Gateway:
         hb_monitor = HeartbeatMonitor(self, _CATO_DIR)
         self._bg_tasks.append(asyncio.create_task(hb_monitor.run_forever(), name="heartbeat-monitor"))
         self._heartbeat_monitor = hb_monitor
+        # Node keepalive pinger — proactively pings registered nodes so stale ones are evicted
+        self._bg_tasks.append(asyncio.create_task(self._nodes.run_ping_loop(), name="node-pinger"))
         logger.info("Gateway started — ws://%s:%d", _WS_HOST, _WS_PORT)
 
     async def _start_adapter(self, adapter: Any) -> None:
@@ -362,7 +364,10 @@ class Gateway:
                 if not _CATO_DIR.exists():
                     continue
 
-                for agent_dir in _CATO_DIR.iterdir():
+                agents_root = _CATO_DIR / "agents"
+                if not agents_root.is_dir():
+                    continue
+                for agent_dir in agents_root.iterdir():
                     if not agent_dir.is_dir():
                         continue
                     crons_path = agent_dir / "CRONS.json"

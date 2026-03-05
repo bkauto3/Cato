@@ -107,6 +107,8 @@ class NodeManager:
         self._nodes: dict[str, NodeInfo] = {}
         # pending invoke: request_id → asyncio.Future
         self._pending: dict[str, asyncio.Future] = {}
+        # pending invoke: request_id → node_id (to cancel only that node's futures)
+        self._pending_node: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -139,10 +141,11 @@ class NodeManager:
         if node_id in self._nodes:
             del self._nodes[node_id]
             logger.info("Node removed: %s", node_id)
-            # Cancel any pending invocations for this node
+            # Cancel only pending invocations that were sent to this specific node
             for req_id, fut in list(self._pending.items()):
-                if not fut.done():
+                if self._pending_node.get(req_id) == node_id and not fut.done():
                     fut.set_exception(RuntimeError(f"Node {node_id!r} disconnected"))
+                    self._pending_node.pop(req_id, None)
 
     def remove_by_ws(self, ws: Any) -> None:
         """Remove the node whose WebSocket matches *ws* (on disconnect)."""
@@ -208,6 +211,7 @@ class NodeManager:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._pending[request_id] = fut
+        self._pending_node[request_id] = node.node_id
 
         import json
         payload = json.dumps({
@@ -219,19 +223,22 @@ class NodeManager:
         try:
             await node.ws.send(payload)
         except Exception as exc:
-            del self._pending[request_id]
+            self._pending.pop(request_id, None)
+            self._pending_node.pop(request_id, None)
             raise RuntimeError(f"Could not send to node {node.node_id!r}: {exc}") from exc
 
         try:
             result = await asyncio.wait_for(fut, timeout=_INVOKE_TIMEOUT)
         except asyncio.TimeoutError:
             self._pending.pop(request_id, None)
+            self._pending_node.pop(request_id, None)
             raise RuntimeError(
                 f"Node {node.node_id!r} timed out after {_INVOKE_TIMEOUT}s "
                 f"for capability {capability!r}"
             )
         finally:
             self._pending.pop(request_id, None)
+            self._pending_node.pop(request_id, None)
 
         return result
 
@@ -296,13 +303,18 @@ class NodeManager:
 
     def register_as_tools(self, register_fn: Any) -> None:
         """
-        Register all node capabilities as agent tools.
+        Register all currently-connected node capabilities as agent tools.
 
-        *register_fn* is ``agent_loop.register_tool``.
+        *register_fn* is a callable with signature ``(tool_name: str, handler: Coroutine)``,
+        e.g. ``agent_loop.register_tool``.
 
         Tools are named ``node.<node_id>.<capability>``.
-        Re-call this whenever a new node registers (or just call once and
-        rely on dynamic dispatch in invoke).
+
+        The caller is responsible for invoking this after each new node registration
+        so that freshly-connected capabilities become available to the agent loop.
+        Call it from the node_register handler in Gateway if you want live wiring:
+
+            nodes.register_as_tools(agent_loop.register_tool)
         """
         for node in self._nodes.values():
             for cap in node.capabilities:
@@ -321,3 +333,32 @@ class NodeManager:
 
                 register_fn(tool_name, _make_handler(node.node_id, cap))
                 logger.debug("Registered node tool: %s", tool_name)
+
+    # ------------------------------------------------------------------
+    # Keepalive ping (run as a Gateway background task)
+    # ------------------------------------------------------------------
+
+    async def run_ping_loop(self) -> None:
+        """
+        Background task: ping all registered nodes every *_PING_INTERVAL* seconds.
+
+        Nodes that do not respond within *_PING_TIMEOUT* seconds are removed
+        (their WebSocket is presumed dead).  This ensures ``is_stale()`` reflects
+        reality rather than waiting passively for the node to send a message.
+        """
+        import json
+        while True:
+            try:
+                await asyncio.sleep(_PING_INTERVAL)
+                for node_id, node in list(self._nodes.items()):
+                    ping = json.dumps({"type": "node_ping", "node_id": node_id})
+                    try:
+                        await asyncio.wait_for(node.ws.send(ping), timeout=_PING_TIMEOUT)
+                        logger.debug("Pinged node %s", node_id)
+                    except Exception as exc:
+                        logger.warning("Ping failed for node %s — removing: %s", node_id, exc)
+                        self.remove(node_id)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.error("Node ping loop error: %s", exc)

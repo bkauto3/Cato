@@ -19,8 +19,8 @@ in seconds (default 300s / 5 minutes).
 
 When a heartbeat fires the full checklist is sent to the agent as a
 system prompt, exactly like a cron-injected message.  The agent responds
-and the result is delivered to the configured channel.  Any item the
-agent flags as failing triggers an alert.
+and the result is delivered to the ``heartbeat`` channel (broadcast to
+all connected WebSocket clients).
 """
 
 from __future__ import annotations
