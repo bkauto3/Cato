@@ -720,7 +720,7 @@ function handleWsMessage(data) {
       if (data.skill) { state.skills.push(data.skill); if (state.currentPage === 'skills') renderSkills(); }
       break;
     case 'skill_deleted':
-      if (data.name) { state.skills = state.skills.filter(s => s.name !== data.name); if (state.currentPage === 'skills') renderSkills(); }
+      if (data.name) { state.skills = state.skills.filter(s => s.dir !== data.name); if (state.currentPage === 'skills') renderSkills(); }
       break;
     case 'agent_list_result':
       if (data.agents) { state.agents = data.agents; if (state.currentPage === 'agents') renderAgents(); }
@@ -926,7 +926,7 @@ function renderAgents() {
     grid.innerHTML = '<span style="color:#4b5563;font-size:13px">No workspace files found.</span>';
   } else {
     grid.innerHTML = files.map(f => {
-      const isIdentity = IDENTITY_FILES.includes(f.toUpperCase()) || IDENTITY_FILES.includes(f);
+      const isIdentity = IDENTITY_FILES.some(x => x.toUpperCase() === f.toUpperCase());
       const color = isIdentity ? '#a78bfa' : '#93c5fd';
       return `<div style="cursor:pointer;background:#1a1d26;border:1px solid #1e2433;border-radius:8px;padding:12px 16px;min-width:120px;text-align:center" onclick="openWorkspaceFilePanel('${esc(f)}', state.workspaceFiles['${esc(f)}'])">
         <div style="font-size:20px;margin-bottom:6px">📄</div>
@@ -1000,9 +1000,9 @@ function closeSkillPanel() {
 }
 
 function deleteSkill(idx) {
-  if (!confirm('Delete skill "' + state.skills[idx].name + '"?')) return;
-  state.skills.splice(idx, 1);
-  renderSkills();
+  const skill = state.skills[idx];
+  if (!confirm('Delete skill "' + skill.name + '"?')) return;
+  wsSend({ type: 'skill_delete', name: skill.dir });
 }
 
 function openInstallModal()  { document.getElementById('install-modal').style.display = 'flex'; }

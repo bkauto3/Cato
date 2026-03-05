@@ -221,7 +221,10 @@ class NodeManager:
             "args":       args,
         })
         try:
-            await node.ws.send(payload)
+            if hasattr(node.ws, "send_str"):
+                await node.ws.send_str(payload)
+            else:
+                await node.ws.send(payload)
         except Exception as exc:
             self._pending.pop(request_id, None)
             self._pending_node.pop(request_id, None)
@@ -353,7 +356,8 @@ class NodeManager:
                 for node_id, node in list(self._nodes.items()):
                     ping = json.dumps({"type": "node_ping", "node_id": node_id})
                     try:
-                        await asyncio.wait_for(node.ws.send(ping), timeout=_PING_TIMEOUT)
+                        _send = node.ws.send_str if hasattr(node.ws, "send_str") else node.ws.send
+                        await asyncio.wait_for(_send(ping), timeout=_PING_TIMEOUT)
                         logger.debug("Pinged node %s", node_id)
                     except Exception as exc:
                         logger.warning("Ping failed for node %s — removing: %s", node_id, exc)

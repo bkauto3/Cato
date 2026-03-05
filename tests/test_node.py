@@ -223,8 +223,8 @@ class TestNodeManagerInvoke:
     async def test_invoke_happy_path(self):
         """invoke() sends a JSON payload and resolves the future from node_result."""
         mgr = NodeManager()
-        ws = MagicMock()
-        ws.send = AsyncMock()
+        ws = MagicMock(spec=["send_str"])
+        ws.send_str = AsyncMock()
         mgr.register("node-1", "B", ["screenshot"], ws)
 
         # Intercept the Future creation so we can resolve it immediately
@@ -236,8 +236,8 @@ class TestNodeManagerInvoke:
 
         assert result["success"] is True
         assert result["result"] == "base64data"
-        ws.send.assert_called_once()
-        sent = json.loads(ws.send.call_args.args[0])
+        ws.send_str.assert_called_once()
+        sent = json.loads(ws.send_str.call_args.args[0])
         assert sent["type"] == "node_invoke"
         assert sent["capability"] == "screenshot"
         assert sent["args"] == {"quality": "high"}
@@ -261,8 +261,8 @@ class TestNodeManagerInvoke:
     async def test_invoke_auto_picks_first_capable_node(self):
         """Without node_id, the first live node with the capability is used."""
         mgr = NodeManager()
-        ws = MagicMock()
-        ws.send = AsyncMock()
+        ws = MagicMock(spec=["send_str"])
+        ws.send_str = AsyncMock()
         mgr.register("cap-node", "B", ["camera"], ws)
 
         async def fake_wait_for(fut, timeout):
@@ -272,7 +272,7 @@ class TestNodeManagerInvoke:
             result = await mgr.invoke("camera", {})
 
         assert result["success"] is True
-        ws.send.assert_called_once()
+        ws.send_str.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_invoke_raises_when_no_capable_node(self):
@@ -283,8 +283,8 @@ class TestNodeManagerInvoke:
     @pytest.mark.asyncio
     async def test_invoke_raises_on_ws_send_error(self):
         mgr = NodeManager()
-        ws = MagicMock()
-        ws.send = AsyncMock(side_effect=ConnectionError("broken pipe"))
+        ws = MagicMock(spec=["send_str"])
+        ws.send_str = AsyncMock(side_effect=ConnectionError("broken pipe"))
         mgr.register("node-1", "B", ["shell"], ws)
 
         with pytest.raises(RuntimeError, match="Could not send"):
@@ -296,8 +296,8 @@ class TestNodeManagerInvoke:
     @pytest.mark.asyncio
     async def test_invoke_raises_on_timeout(self):
         mgr = NodeManager()
-        ws = MagicMock()
-        ws.send = AsyncMock()
+        ws = MagicMock(spec=["send_str"])
+        ws.send_str = AsyncMock()
         mgr.register("node-1", "B", ["screenshot"], ws)
 
         async def fake_wait_for(fut, timeout):
@@ -314,8 +314,8 @@ class TestNodeManagerInvoke:
     async def test_invoke_cleans_up_pending_on_success(self):
         """The pending entry is removed after a successful invoke."""
         mgr = NodeManager()
-        ws = MagicMock()
-        ws.send = AsyncMock()
+        ws = MagicMock(spec=["send_str"])
+        ws.send_str = AsyncMock()
         mgr.register("node-1", "B", ["shell"], ws)
 
         async def fake_wait_for(fut, timeout):
@@ -662,3 +662,88 @@ class TestNodeManagerRemovePendingCancellation:
             assert not fut2.done()
         finally:
             loop.close()
+
+
+# ===========================================================================
+# R5 bug-fix: send_str vs send dispatch in invoke() and run_ping_loop()
+# ===========================================================================
+
+class TestR5SendStrDispatch:
+    """
+    Verify that invoke() and run_ping_loop() dispatch to ws.send_str on
+    aiohttp-style websockets (which expose send_str) and fall back to
+    ws.send on raw-websockets-style connections (which only expose send).
+    """
+
+    @pytest.mark.asyncio
+    async def test_invoke_uses_send_str_for_aiohttp_node(self):
+        """invoke() calls ws.send_str (not ws.send) when the ws has send_str."""
+        mgr = NodeManager()
+        # aiohttp WebSocketResponse exposes send_str, not send
+        ws = MagicMock(spec=["send_str"])
+        ws.send_str = AsyncMock()
+        mgr.register("aio-node", "AioHTTP Node", ["screenshot"], ws)
+
+        async def fake_wait_for(coro_or_fut, timeout):
+            return {"success": True, "result": "img", "error": ""}
+
+        with patch("asyncio.wait_for", side_effect=fake_wait_for):
+            result = await mgr.invoke("screenshot", {}, node_id="aio-node")
+
+        assert result["success"] is True
+        ws.send_str.assert_called_once()
+        # send must NOT have been called (spec restricts the mock to send_str only)
+        assert not hasattr(ws, "send") or not ws.send.called
+
+    @pytest.mark.asyncio
+    async def test_invoke_uses_send_for_raw_ws_node(self):
+        """invoke() calls ws.send (not ws.send_str) when the ws has no send_str."""
+        mgr = NodeManager()
+        # websockets library exposes send, not send_str
+        ws = MagicMock(spec=["send"])
+        ws.send = AsyncMock()
+        mgr.register("raw-node", "Raw WS Node", ["shell"], ws)
+
+        async def fake_wait_for(coro_or_fut, timeout):
+            return {"success": True, "result": "output", "error": ""}
+
+        with patch("asyncio.wait_for", side_effect=fake_wait_for):
+            result = await mgr.invoke("shell", {}, node_id="raw-node")
+
+        assert result["success"] is True
+        ws.send.assert_called_once()
+        # send_str must NOT have been called (spec restricts mock to send only)
+        assert not hasattr(ws, "send_str") or not ws.send_str.called
+
+    @pytest.mark.asyncio
+    async def test_ping_loop_uses_send_str_for_aiohttp_node(self):
+        """run_ping_loop() sends the ping via ws.send_str for aiohttp-style nodes."""
+        mgr = NodeManager()
+        # aiohttp-style ws: has send_str, not send
+        ws = MagicMock(spec=["send_str"])
+        ws.send_str = AsyncMock()
+        mgr.register("aio-ping", "AioHTTP Ping Node", ["screenshot"], ws)
+
+        sleep_call_count = 0
+
+        async def fake_sleep(delay):
+            nonlocal sleep_call_count
+            sleep_call_count += 1
+            # First call: return normally so the loop body (ping) executes.
+            # Second call: cancel so the loop exits cleanly.
+            if sleep_call_count >= 2:
+                raise asyncio.CancelledError
+
+        async def fake_wait_for(coro_or_fut, timeout):
+            # Execute the coroutine so send_str is actually awaited
+            await coro_or_fut
+            return None
+
+        with patch("asyncio.sleep", side_effect=fake_sleep), \
+             patch("asyncio.wait_for", side_effect=fake_wait_for):
+            await mgr.run_ping_loop()
+
+        ws.send_str.assert_called_once()
+        sent_payload = json.loads(ws.send_str.call_args.args[0])
+        assert sent_payload["type"] == "node_ping"
+        assert sent_payload["node_id"] == "aio-ping"

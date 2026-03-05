@@ -265,11 +265,24 @@ class Gateway:
         except Exception as exc:
             logger.error("WebSocket server error: %s", exc)
 
+    @staticmethod
+    async def _ws_send(ws: Any, payload: dict) -> None:
+        """Send a JSON payload to a WebSocket client.
+
+        Handles both aiohttp ``WebSocketResponse`` (uses ``send_str``) and the
+        raw ``websockets`` library (uses ``send``).
+        """
+        raw = json.dumps(payload)
+        if hasattr(ws, "send_str"):
+            await ws.send_str(raw)
+        else:
+            await ws.send(raw)
+
     async def _handle_ws_message(self, ws: Any, raw: str) -> None:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            await ws.send(json.dumps({"type": "error", "text": "invalid JSON"}))
+            await self._ws_send(ws, {"type": "error", "text": "invalid JSON"})
             return
         msg_type = data.get("type", "message")
 
@@ -277,15 +290,15 @@ class Gateway:
         if msg_type.startswith("node_"):
             reply = await self._nodes.handle_message(ws, data)
             if reply is not None:
-                await ws.send(json.dumps(reply))
+                await self._ws_send(ws, reply)
             return
 
         if msg_type == "health":
-            await ws.send(json.dumps({
+            await self._ws_send(ws, {
                 "type": "health", "status": "ok",
                 "sessions": len(self._lanes),
                 "uptime": int(time.monotonic() - self._start_time),
-            }))
+            })
         elif msg_type == "message":
             text = data.get("text", "").strip()
             if text:
@@ -296,64 +309,77 @@ class Gateway:
                     data.get("agent_id", self._cfg.agent_name),
                 )
         elif msg_type == "set_vault_key":
-            # Onboarding wizard: save an API key into the vault
             vault_key = data.get("vault_key", "").strip()
             value     = data.get("value", "").strip()
             if vault_key and value and self._vault is not None:
                 try:
                     self._vault.set(vault_key, value)
                     logger.info("Vault key saved via UI: %s", vault_key)
-                    await ws.send(json.dumps({"type": "vault_key_saved", "vault_key": vault_key}))
+                    await self._ws_send(ws, {"type": "vault_key_saved", "vault_key": vault_key})
                 except Exception as exc:
-                    await ws.send(json.dumps({"type": "error", "text": f"vault save failed: {exc}"}))
+                    await self._ws_send(ws, {"type": "error", "text": f"vault save failed: {exc}"})
             else:
-                await ws.send(json.dumps({"type": "error", "text": "vault_key and value required"}))
+                await self._ws_send(ws, {"type": "error", "text": "vault_key and value required"})
 
         elif msg_type == "skill_list":
-            await ws.send(json.dumps({"type": "skill_list_result", "skills": self._list_skills()}))
+            await self._ws_send(ws, {"type": "skill_list_result", "skills": self._list_skills()})
 
         elif msg_type == "skill_install":
             url = data.get("url", "").strip()
             if not url:
-                await ws.send(json.dumps({"type": "error", "text": "url required"}))
+                await self._ws_send(ws, {"type": "error", "text": "url required"})
             else:
                 result = await self._install_skill_from_url(url)
                 if result:
-                    await ws.send(json.dumps({"type": "skill_installed", "skill": result}))
+                    await self._ws_send(ws, {"type": "skill_installed", "skill": result})
                 else:
-                    await ws.send(json.dumps({"type": "error", "text": f"Failed to install skill from {url}"}))
+                    await self._ws_send(ws, {"type": "error", "text": f"Failed to install skill from {url}"})
 
         elif msg_type == "skill_delete":
             name = data.get("name", "").strip()
             if not name:
-                await ws.send(json.dumps({"type": "error", "text": "name required"}))
+                await self._ws_send(ws, {"type": "error", "text": "name required"})
             else:
                 self._delete_skill(name)
-                await ws.send(json.dumps({"type": "skill_deleted", "name": name}))
+                await self._ws_send(ws, {"type": "skill_deleted", "name": name})
 
         elif msg_type == "agent_list":
-            await ws.send(json.dumps({"type": "agent_list_result", "agents": self._list_agents()}))
+            try:
+                agents = self._list_agents()
+            except OSError as exc:
+                logger.error("_list_agents failed: %s", exc)
+                agents = []
+            await self._ws_send(ws, {"type": "agent_list_result", "agents": agents})
 
         elif msg_type == "workspace_files":
-            await ws.send(json.dumps({"type": "workspace_files_result", "files": self._list_workspace_files()}))
+            try:
+                files = self._list_workspace_files()
+            except OSError as exc:
+                logger.error("_list_workspace_files failed: %s", exc)
+                files = {}
+            await self._ws_send(ws, {"type": "workspace_files_result", "files": files})
 
         elif msg_type == "workspace_file_get":
             agent_id = data.get("agent_id", self._cfg.agent_name)
             filename = data.get("filename", "").strip()
             content  = self._read_workspace_file(agent_id, filename)
-            await ws.send(json.dumps({"type": "workspace_file_result", "name": filename, "content": content}))
+            await self._ws_send(ws, {"type": "workspace_file_result", "name": filename, "content": content})
 
         elif msg_type == "workspace_file_save":
             filename = data.get("filename", "").strip()
             content  = data.get("content", "")
             if filename:
-                self._write_workspace_file(filename, content)
-                await ws.send(json.dumps({"type": "workspace_file_saved", "filename": filename}))
+                try:
+                    self._write_workspace_file(filename, content)
+                    await self._ws_send(ws, {"type": "workspace_file_saved", "filename": filename})
+                except OSError as exc:
+                    logger.error("workspace_file_save failed for %s: %s", filename, exc)
+                    await self._ws_send(ws, {"type": "error", "text": f"Could not save file: {exc}"})
             else:
-                await ws.send(json.dumps({"type": "error", "text": "filename required"}))
+                await self._ws_send(ws, {"type": "error", "text": "filename required"})
 
         else:
-            await ws.send(json.dumps({"type": "error", "text": f"unknown type: {msg_type}"}))
+            await self._ws_send(ws, {"type": "error", "text": f"unknown type: {msg_type}"})
 
     def register_websocket(self, ws: Any) -> None:
         """Register a WebSocket client (called by ui/server.py)."""
@@ -413,16 +439,19 @@ class Gateway:
         # Derive a slug from the URL
         slug = re.sub(r"[^a-zA-Z0-9_-]", "-", url.rstrip("/").split("/")[-1])
         dest = skills_dir / slug
-        dest.mkdir(parents=True, exist_ok=True)
         try:
             if url.endswith(".md"):
-                # Raw SKILL.md fetch
+                # Raw SKILL.md fetch — create dir first, then write file
+                dest.mkdir(parents=True, exist_ok=True)
                 import urllib.request
                 with urllib.request.urlopen(url, timeout=15) as r:
                     content = r.read().decode("utf-8", errors="replace")
                 (dest / "SKILL.md").write_text(content, encoding="utf-8")
             else:
-                # Git clone
+                # Git clone — remove existing dir first so reinstalls work cleanly
+                import shutil as _shutil
+                if dest.exists():
+                    _shutil.rmtree(dest)
                 import asyncio
                 proc = await asyncio.create_subprocess_exec(
                     "git", "clone", "--depth=1", url, str(dest),
@@ -465,15 +494,24 @@ class Gateway:
             return agents
         IDENTITY_FILES = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "TOOLS.md",
                           "USER.md", "AGENTS.md", "HEARTBEAT.md"]
-        for agent_dir in agents_dir.iterdir():
+        try:
+            entries = list(agents_dir.iterdir())
+        except OSError as exc:
+            logger.warning("Could not read agents dir %s: %s", agents_dir, exc)
+            return agents
+        for agent_dir in entries:
             if not agent_dir.is_dir():
                 continue
             workspace = agent_dir / "workspace"
             if not workspace.exists():
                 workspace = agent_dir
-            found_files = [f.name for f in workspace.iterdir()
-                           if f.is_file() and f.suffix == ".md"
-                           and f.name.upper() in [x.upper() for x in IDENTITY_FILES]]
+            try:
+                found_files = [f.name for f in workspace.iterdir()
+                               if f.is_file() and f.suffix == ".md"
+                               and f.name.upper() in [x.upper() for x in IDENTITY_FILES]]
+            except OSError as exc:
+                logger.warning("Could not read agent workspace %s: %s", workspace, exc)
+                found_files = []
             agents.append({
                 "id": agent_dir.name,
                 "workspace": str(workspace),
@@ -493,7 +531,12 @@ class Gateway:
         result = {}
         if not ws.exists():
             return result
-        for f in ws.iterdir():
+        try:
+            entries = list(ws.iterdir())
+        except OSError as exc:
+            logger.warning("Could not read workspace dir %s: %s", ws, exc)
+            return result
+        for f in entries:
             if f.is_file() and f.suffix == ".md":
                 try:
                     result[f.name] = f.read_text(encoding="utf-8", errors="replace")
@@ -529,7 +572,12 @@ class Gateway:
         dead: set = set()
         for ws in list(self._ws_clients):
             try:
-                await ws.send(raw)
+                # aiohttp WebSocketResponse uses send_str(); the raw websockets
+                # library uses send().  Detect by presence of send_str attribute.
+                if hasattr(ws, "send_str"):
+                    await ws.send_str(raw)
+                else:
+                    await ws.send(raw)
             except Exception:
                 dead.add(ws)
         self._ws_clients -= dead
