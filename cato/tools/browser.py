@@ -1,13 +1,17 @@
 """
 cato/tools/browser.py — Browser automation using Patchright (stealth Playwright fork).
 
-Actions: navigate, snapshot, click, type, screenshot, pdf, search
+Actions: navigate, snapshot, click, type, fill, screenshot, pdf, search,
+         eval, extract_main, output_to_file, accessibility_snapshot,
+         network_requests, scroll, wait, wait_for, key_press, hover,
+         select_option, handle_dialog, navigate_back, console_messages
 Search engine: DuckDuckGo only (Google/Brave block bots).
 Browser: Chromium only with persistent profile at ~/.cato/browser_profile/.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import urllib.parse
@@ -44,6 +48,8 @@ class BrowserTool:
         self._browser = None
         self._page = None
         self._playwright = None
+        self._network_log: list[dict] = []
+        self._console_messages: list[dict] = []
         _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         _SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
         _PDF_DIR.mkdir(parents=True, exist_ok=True)
@@ -63,13 +69,28 @@ class BrowserTool:
         await self._ensure_browser()
 
         actions = {
-            "navigate":   self._navigate,
-            "snapshot":   self._snapshot,
-            "click":      self._click,
-            "type":       self._type,
-            "screenshot": self._screenshot,
-            "pdf":        self._pdf,
-            "search":     self._search,
+            "navigate":               self._navigate,
+            "snapshot":               self._snapshot,
+            "click":                  self._click,
+            "type":                   self._type,
+            "fill":                   self._type,           # alias — same page.fill() semantics
+            "screenshot":             self._screenshot,
+            "pdf":                    self._pdf,
+            "search":                 self._search,
+            "eval":                   self._eval,
+            "extract_main":           self._extract_main,
+            "output_to_file":         self._output_to_file,
+            "accessibility_snapshot": self._accessibility_snapshot,
+            "network_requests":       self._get_network_requests,
+            "scroll":                 self._scroll,
+            "wait":                   self._wait,
+            "wait_for":               self._wait_for,
+            "key_press":              self._key_press,
+            "hover":                  self._hover,
+            "select_option":          self._select_option,
+            "handle_dialog":          self._handle_dialog,
+            "navigate_back":          self._navigate_back,
+            "console_messages":       self._get_console_messages,
         }
 
         if action not in actions:
@@ -106,6 +127,18 @@ class BrowserTool:
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
         self._page = await self._browser.new_page()
+        # Register network listeners for network_requests action
+        self._page.on("request", lambda req: self._network_log.append({
+            "type": "request", "url": req.url, "method": req.method
+        }))
+        self._page.on("response", lambda res: self._network_log.append({
+            "type": "response", "url": res.url, "status": res.status
+        }))
+        # Register console listener for console_messages action
+        self._page.on(
+            "console",
+            lambda msg: self._console_messages.append({"type": msg.type, "text": msg.text}),
+        )
         logger.debug("Patchright browser launched with profile %s", _PROFILE_DIR)
 
     async def close(self) -> None:
@@ -237,6 +270,95 @@ class BrowserTool:
         await self._page.pdf(path=str(out_path))
         return {"success": True, "path": str(out_path), "url": self._page.url}
 
+    async def _eval(self, js_code: str) -> dict:
+        """Execute arbitrary JavaScript in page context. Returns result + SHA-256 code hash."""
+        import hashlib
+        code_hash = hashlib.sha256(js_code.encode()).hexdigest()[:16]
+        try:
+            result = await self._page.evaluate(js_code)
+            return {
+                "success": True,
+                "result": result,
+                "code_hash": code_hash,
+                "url": self._page.url,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "code_hash": code_hash}
+
+    async def _extract_main(self) -> dict:
+        """Readability-style main content extraction. Removes nav/header/footer noise.
+
+        Operates on a deep clone of <body> so the live DOM is never mutated.
+        This is critical for audit integrity: screenshots and evals taken after
+        extract_main() still see the original, unmodified page.
+        """
+        text = await self._page.evaluate("""
+            () => {
+                // Work on a deep clone — never mutate the live DOM.
+                const clone = document.body.cloneNode(true);
+                const noise = ['nav','header','footer','aside','[role="banner"]',
+                              '[role="navigation"]','[role="complementary"]',
+                              '.nav','.header','.footer','.sidebar','.menu',
+                              '#nav','#header','#footer','#sidebar'];
+                noise.forEach(sel => {
+                    clone.querySelectorAll(sel).forEach(el => el.remove());
+                });
+                const candidates = clone.querySelectorAll('article,main,[role="main"],p,div');
+                let best = null, bestScore = 0;
+                candidates.forEach(el => {
+                    const text = el.innerText || '';
+                    const score = text.length - (el.querySelectorAll('a').length * 20);
+                    if (score > bestScore) { bestScore = score; best = el; }
+                });
+                return best ? best.innerText.trim() : clone.innerText.trim();
+            }
+        """)
+        return {
+            "text": text[:5000],
+            "char_count": len(text),
+            "url": self._page.url,
+            "title": await self._page.title(),
+        }
+
+    async def _output_to_file(self, filename: str, content: str, fmt: str = "md") -> dict:
+        """Write content to workspace file. Sanitizes filename to prevent path traversal."""
+        from pathlib import Path as _Path
+        out_dir = _Path.home() / ".cato" / "workspace" / ".conduit"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = _Path(filename).name  # strip any path traversal
+        # Guard against empty or dot-only names (e.g. filename='' or filename='.')
+        if not safe_name or safe_name in (".", ".."):
+            safe_name = "output"
+        if not safe_name.endswith(f".{fmt}"):
+            safe_name = f"{safe_name}.{fmt}"
+        out_path = out_dir / safe_name
+        out_path.write_text(content, encoding="utf-8")
+        return {"success": True, "path": str(out_path), "bytes": len(content.encode())}
+
+    async def _accessibility_snapshot(self) -> dict:
+        """Return accessibility tree for the current page.
+
+        Uses page.aria_snapshot() (Patchright / Playwright ≥1.35).
+        Falls back to the deprecated page.accessibility.snapshot() for
+        older Playwright builds that haven't removed it yet.
+        """
+        try:
+            snapshot = await self._page.aria_snapshot()
+        except AttributeError:
+            # Older Playwright: page.accessibility still present
+            snapshot = await self._page.accessibility.snapshot()  # type: ignore[attr-defined]
+        return {
+            "tree": snapshot,
+            "url": self._page.url,
+            "title": await self._page.title(),
+        }
+
+    async def _get_network_requests(self) -> dict:
+        """Return and clear the accumulated network request/response log."""
+        reqs = list(self._network_log)
+        self._network_log.clear()
+        return {"requests": reqs, "count": len(reqs)}
+
     async def _search(self, query: str) -> dict:
         """DuckDuckGo search — returns top 5 results."""
         search_url = f"https://duckduckgo.com/?q={urllib.parse.quote(query)}&ia=web"
@@ -261,3 +383,108 @@ class BrowserTool:
         """)
 
         return {"query": query, "results": results}
+
+    # ------------------------------------------------------------------
+    # Action implementations (Wave 1 additions: scroll, fill-alias, wait,
+    # wait_for, key_press, hover, select_option, handle_dialog,
+    # navigate_back, console_messages)
+    # ------------------------------------------------------------------
+
+    async def _scroll(self, direction: str = "down", amount: int = 300, selector: str = None) -> dict:
+        """Scroll the page or scroll a specific element into view."""
+        if selector:
+            await self._page.locator(selector).scroll_into_view_if_needed()
+            return {"success": True, "action": "scroll_into_view", "selector": selector}
+        delta_x = {"left": -amount, "right": amount}.get(direction, 0)
+        delta_y = {"up": -amount, "down": amount}.get(direction, 0)
+        await self._page.mouse.wheel(delta_x, delta_y)
+        return {"success": True, "direction": direction, "amount": amount, "url": self._page.url}
+
+    async def _wait(self, seconds: float = 1.0) -> dict:
+        """Wait a fixed number of seconds (capped at 30s)."""
+        capped = min(float(seconds), 30.0)
+        await asyncio.sleep(capped)
+        return {"success": True, "waited_seconds": capped}
+
+    async def _wait_for(
+        self,
+        condition: str = "selector",
+        value: str = "",
+        timeout_ms: int = 10000,
+    ) -> dict:
+        """Wait for a condition: selector | text | network_idle | url."""
+        import json as _json
+        try:
+            if condition == "selector":
+                await self._page.wait_for_selector(value, timeout=timeout_ms)
+            elif condition == "text":
+                await self._page.wait_for_function(
+                    f"document.body.innerText.includes({_json.dumps(value)})",
+                    timeout=timeout_ms,
+                )
+            elif condition == "network_idle":
+                await self._page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            elif condition == "url":
+                await self._page.wait_for_url(value, timeout=timeout_ms)
+            return {"success": True, "condition": condition, "value": value}
+        except Exception as exc:
+            return {"success": False, "condition": condition, "value": value, "error": str(exc)}
+
+    async def _key_press(self, key: str = "Enter") -> dict:
+        """Press a keyboard key (e.g. 'Enter', 'Tab', 'Escape')."""
+        await self._page.keyboard.press(key)
+        return {"success": True, "key": key, "url": self._page.url}
+
+    async def _hover(self, selector: str) -> dict:
+        """Move the mouse pointer over an element."""
+        try:
+            await self._page.hover(selector, timeout=10000)
+            return {"success": True, "selector": selector}
+        except Exception as exc:
+            return {"success": False, "selector": selector, "error": str(exc)}
+
+    async def _select_option(
+        self,
+        selector: str,
+        value: str = "",
+        label: str = "",
+        index: int = None,
+    ) -> dict:
+        """Select an option in a <select> element by value, visible label, or 0-based index."""
+        try:
+            if index is not None:
+                await self._page.select_option(selector, index=index)
+            elif label:
+                await self._page.select_option(selector, label=label)
+            else:
+                await self._page.select_option(selector, value=value)
+            return {"success": True, "selector": selector, "value": value or label}
+        except Exception as exc:
+            return {"success": False, "selector": selector, "error": str(exc)}
+
+    async def _handle_dialog(self, action: str = "accept", text: str = "") -> dict:
+        """Register an accept or dismiss handler for the next browser dialog (alert/confirm/prompt)."""
+        result: dict = {"handled": False}
+
+        async def on_dialog(dialog):
+            if action == "accept":
+                await dialog.accept(text) if text else await dialog.accept()
+            else:
+                await dialog.dismiss()
+            result["handled"] = True
+            result["message"] = dialog.message
+            result["type"] = dialog.type
+
+        self._page.once("dialog", on_dialog)
+        return {"success": True, "registered_action": action}
+
+    async def _navigate_back(self) -> dict:
+        """Navigate to the previous page in browser history."""
+        await self._page.go_back(timeout=15000)
+        return {"success": True, "url": self._page.url, "title": await self._page.title()}
+
+    async def _get_console_messages(self) -> dict:
+        """Return all buffered console messages and clear the internal buffer."""
+        msgs = list(self._console_messages)
+        self._console_messages.clear()
+        return {"messages": msgs, "count": len(msgs)}

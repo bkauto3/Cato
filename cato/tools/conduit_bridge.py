@@ -17,6 +17,7 @@ from extracted HTML/text content before returning to agent.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -25,6 +26,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from ..audit import AuditLog
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -32,11 +35,35 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 ACTION_COSTS: dict[str, int] = {
-    "navigate":   0,
-    "click":      0,
-    "type":       0,
-    "extract":    0,
-    "screenshot": 0,
+    # Wave 0
+    "navigate":               0,
+    "click":                  0,
+    "type":                   0,
+    "fill":                   0,
+    "extract":                0,
+    "screenshot":             0,
+    # Wave 1
+    "scroll":                 0,
+    "wait":                   0,
+    "wait_for":               0,
+    "key_press":              0,
+    "hover":                  0,
+    "select_option":          0,
+    "handle_dialog":          0,
+    "navigate_back":          0,
+    "console_messages":       0,
+    # Wave 2
+    "eval":                   0,
+    "extract_main":           0,
+    "output_to_file":         0,
+    "accessibility_snapshot": 0,
+    "network_requests":       0,
+    # Wave 3
+    "map":                    0,
+    "crawl":                  0,
+    "fingerprint":            0,
+    "check_changed":          0,
+    "export_proof":           0,
 }
 
 _VOIX_TAGS_RE = re.compile(r"<(tool|context)>.*?</(tool|context)>", re.DOTALL)
@@ -211,6 +238,11 @@ def _strip_voix_tags(html: str) -> str:
     return _VOIX_TAGS_RE.sub("", html).strip()
 
 
+async def _sync_as_coro(fn, *args, **kwargs):
+    """Wrap a synchronous callable so it can be awaited in the execute() dispatcher."""
+    return fn(*args, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # ConduitBridge
 # ---------------------------------------------------------------------------
@@ -262,6 +294,10 @@ class ConduitBridge:
         # instead of writing to the global ~/.cato/cato.db.
         ledger_db = (data_dir / "cato.db") if data_dir is not None else None
         self._ledger = ConduitBillingLedger(db_path=ledger_db)
+        # AuditLog shares the same db file as the billing ledger so both tables
+        # live in one SQLite file (cato.db).  This is what feeds the SHA-256
+        # hash chain used by verify_chain() / ReceiptWriter.
+        self._audit_log = AuditLog(db_path=ledger_db)
 
         # Underlying browser (lazy init)
         self._browser_tool: Optional[Any] = None
@@ -290,8 +326,9 @@ class ConduitBridge:
         self._ledger = value
 
     async def start(self) -> None:
-        """Initialize the browser and billing ledger."""
+        """Initialize the browser, billing ledger, and audit log."""
         self._ledger.connect()
+        self._audit_log.connect()
         # Lazy import to avoid circular deps
         from ..tools.browser import BrowserTool
         self._browser_tool = BrowserTool()
@@ -323,15 +360,21 @@ class ConduitBridge:
             pass
         return self._session_cost_cents_total
 
-    def _charge(self, action: str, url_or_selector: str = "", success: bool = True) -> None:
-        """Deduct cost for action; raise BudgetExceededError if over budget.
+    def _audit(
+        self,
+        action: str,
+        inputs: dict,
+        result: Any,
+        url_or_selector: str = "",
+        error: str = "",
+    ) -> None:
+        """Unified accounting method: writes to BOTH billing ledger AND AuditLog hash chain.
 
-        Checks both the in-memory counter AND the persisted ledger total so that
-        externally recorded charges (e.g. from a previous bridge instance for the
-        same session) are accounted for.
+        This is the ONLY method that should be called for new bridge actions.
+        Every browser action is reflected in the SHA-256 chain AND the billing table.
         """
-        cost = ACTION_COSTS.get(action.lower(), 1)
-        # Query the ledger for the authoritative session total
+        cost = ACTION_COSTS.get(action.lower(), 0)
+        # Budget check — query ledger for authoritative total
         try:
             current_total = self._ledger.session_total_cents(self._session_id)
         except Exception:
@@ -342,61 +385,401 @@ class ConduitBridge:
                 f"Conduit budget {self._budget_cents}¢ would be exceeded by '{action}' ({cost}¢). "
                 f"Currently at {current_total}¢."
             )
+
+        # 1) Write to billing ledger (conduit_billing table)
+        self._ledger.record(self._session_id, action, cost, url_or_selector, not bool(error))
         self._session_cost_cents_total = current_total + cost
-        self._ledger.record(self._session_id, action, cost, url_or_selector, success)
+
+        # 2) Write to audit hash chain (audit_log table)
+        self._audit_log.log(
+            session_id=self._session_id,
+            action_type="tool_call",
+            tool_name=f"browser.{action}",
+            inputs=inputs,
+            outputs=result if isinstance(result, dict) else {"raw": str(result)},
+            cost_cents=cost,
+            error=error,
+        )
+
+    # ------------------------------------------------------------------
+    # Bridge action methods — all go through _audit() (not _charge())
+    # ------------------------------------------------------------------
 
     async def navigate(self, url: str) -> dict:
-        self._charge("navigate", url_or_selector=url)
         assert self._browser_tool is not None
         result = await self._browser_tool._dispatch("navigate", {"url": url})
         if "text" in result:
             result["text"] = _strip_voix_tags(result["text"])
-        # Track current URL for extract() to use
         self._current_url = result.get("url", url)
+        self._audit("navigate", {"url": url}, result, url_or_selector=url,
+                    error=result.get("error", ""))
         return result
 
     async def click(self, selector: str) -> dict:
-        self._charge("click", url_or_selector=selector)
         assert self._browser_tool is not None
-        return await self._browser_tool._dispatch("click", {"selector": selector})
+        result = await self._browser_tool._dispatch("click", {"selector": selector})
+        self._audit("click", {"selector": selector}, result, url_or_selector=selector,
+                    error=result.get("error", ""))
+        return result
 
     async def type_text(self, selector: str, text: str) -> dict:
-        self._charge("type", url_or_selector=selector)
         assert self._browser_tool is not None
-        return await self._browser_tool._dispatch("type", {"selector": selector, "text": text})
+        result = await self._browser_tool._dispatch("type", {"selector": selector, "text": text})
+        self._audit("type", {"selector": selector, "text": text}, result,
+                    url_or_selector=selector, error=result.get("error", ""))
+        return result
+
+    async def fill(self, selector: str, text: str) -> dict:
+        """Named alias for type_text — goes through _audit() with 'fill' action name."""
+        assert self._browser_tool is not None
+        result = await self._browser_tool._dispatch("fill", {"selector": selector, "text": text})
+        self._audit("fill", {"selector": selector, "text": text}, result,
+                    url_or_selector=selector, error=result.get("error", ""))
+        return result
 
     async def extract(self, selector: str = "body") -> dict:
-        self._charge("extract", url_or_selector=selector)
         assert self._browser_tool is not None
         result = await self._browser_tool._dispatch("snapshot", {})
         if "text" in result:
             result["text"] = _strip_voix_tags(result["text"])
         result["char_count"] = len(result.get("text", ""))
+        self._audit("extract", {"selector": selector}, result, url_or_selector=selector,
+                    error=result.get("error", ""))
         return result
 
     async def screenshot(self, path: Optional[str] = None) -> dict:
-        self._charge("screenshot")
         assert self._browser_tool is not None
         kwargs: dict[str, Any] = {}
         if path:
             kwargs["filename"] = path
-        return await self._browser_tool._dispatch("screenshot", kwargs)
+        result = await self._browser_tool._dispatch("screenshot", kwargs)
+        self._audit("screenshot", kwargs, result, error=result.get("error", ""))
+        return result
+
+    async def scroll(
+        self,
+        direction: str = "down",
+        amount: int = 300,
+        selector: Optional[str] = None,
+    ) -> dict:
+        assert self._browser_tool is not None
+        inputs: dict[str, Any] = {"direction": direction, "amount": amount}
+        if selector is not None:
+            inputs["selector"] = selector
+        result = await self._browser_tool._dispatch("scroll", inputs.copy())
+        self._audit("scroll", inputs, result, url_or_selector=selector or "",
+                    error=result.get("error", ""))
+        return result
+
+    async def wait(self, seconds: float = 1.0) -> dict:
+        assert self._browser_tool is not None
+        inputs = {"seconds": seconds}
+        result = await self._browser_tool._dispatch("wait", inputs.copy())
+        self._audit("wait", inputs, result, error=result.get("error", ""))
+        return result
+
+    async def wait_for(
+        self,
+        condition: str = "selector",
+        value: str = "",
+        timeout_ms: int = 10000,
+    ) -> dict:
+        assert self._browser_tool is not None
+        inputs = {"condition": condition, "value": value, "timeout_ms": timeout_ms}
+        result = await self._browser_tool._dispatch("wait_for", inputs.copy())
+        self._audit("wait_for", inputs, result, error=result.get("error", ""))
+        return result
+
+    async def key_press(self, key: str = "Enter") -> dict:
+        assert self._browser_tool is not None
+        inputs = {"key": key}
+        result = await self._browser_tool._dispatch("key_press", inputs.copy())
+        self._audit("key_press", inputs, result, error=result.get("error", ""))
+        return result
+
+    async def hover(self, selector: str) -> dict:
+        assert self._browser_tool is not None
+        inputs = {"selector": selector}
+        result = await self._browser_tool._dispatch("hover", inputs.copy())
+        self._audit("hover", inputs, result, url_or_selector=selector,
+                    error=result.get("error", ""))
+        return result
+
+    async def select_option(
+        self,
+        selector: str,
+        value: str = "",
+        label: str = "",
+        index: Optional[int] = None,
+    ) -> dict:
+        assert self._browser_tool is not None
+        inputs: dict[str, Any] = {"selector": selector, "value": value, "label": label}
+        if index is not None:
+            inputs["index"] = index
+        result = await self._browser_tool._dispatch("select_option", inputs.copy())
+        self._audit("select_option", inputs, result, url_or_selector=selector,
+                    error=result.get("error", ""))
+        return result
+
+    async def handle_dialog(self, action: str = "accept", text: str = "") -> dict:
+        assert self._browser_tool is not None
+        inputs = {"action": action, "text": text}
+        result = await self._browser_tool._dispatch("handle_dialog", inputs.copy())
+        self._audit("handle_dialog", inputs, result, error=result.get("error", ""))
+        return result
+
+    async def navigate_back(self) -> dict:
+        assert self._browser_tool is not None
+        result = await self._browser_tool._dispatch("navigate_back", {})
+        self._audit("navigate_back", {}, result, error=result.get("error", ""))
+        return result
+
+    async def console_messages(self) -> dict:
+        assert self._browser_tool is not None
+        result = await self._browser_tool._dispatch("console_messages", {})
+        self._audit("console_messages", {}, result, error=result.get("error", ""))
+        return result
+
+    # ------------------------------------------------------------------
+    # Wave 2: Extraction bridge methods
+    # ------------------------------------------------------------------
+
+    async def eval(self, js_code: str) -> dict:
+        """
+        Execute js_code in page context. js_code is stored verbatim in audit inputs —
+        this is Conduit's unique differentiator: cryptographic proof of exactly what code ran.
+        """
+        assert self._browser_tool is not None
+        result = await self._browser_tool._dispatch("eval", {"js_code": js_code})
+        # js_code MUST be in inputs — core differentiator of Conduit.
+        # Route through _audit() so the budget check is enforced like all other actions.
+        # _sanitize_inputs() will NOT redact js_code (no sensitive key substring match).
+        self._audit(
+            "eval",
+            {"js_code": js_code, "code_hash": result.get("code_hash", "")},
+            result,
+            error="" if result.get("success") else result.get("error", ""),
+        )
+        return result
+
+    async def extract_main(self) -> dict:
+        """Readability-style main content extraction (strips nav/header/footer noise)."""
+        assert self._browser_tool is not None
+        result = await self._browser_tool._dispatch("extract_main", {})
+        if "text" in result:
+            result["text"] = _strip_voix_tags(result["text"])
+        self._audit(
+            "extract_main",
+            {"url": result.get("url", "")},
+            {"char_count": result.get("char_count", 0), "title": result.get("title", "")},
+            error=result.get("error", ""),
+        )
+        return result
+
+    async def output_to_file(self, filename: str, content: str, fmt: str = "md") -> dict:
+        """
+        Write content to a workspace file. Audit stores filename + fmt + byte_count
+        but NOT the full content (may be very large).
+        """
+        assert self._browser_tool is not None
+        result = await self._browser_tool._dispatch(
+            "output_to_file", {"filename": filename, "content": content, "fmt": fmt}
+        )
+        # Audit inputs: filename + fmt + byte_count — NOT the full content
+        self._audit(
+            "output_to_file",
+            {"filename": filename, "fmt": fmt, "byte_count": result.get("bytes", 0)},
+            result,
+            error="" if result.get("success") else result.get("error", ""),
+        )
+        return result
+
+    async def accessibility_snapshot(self) -> dict:
+        """Return Playwright accessibility tree for the current page."""
+        assert self._browser_tool is not None
+        result = await self._browser_tool._dispatch("accessibility_snapshot", {})
+        self._audit(
+            "accessibility_snapshot",
+            {"url": result.get("url", "")},
+            {"title": result.get("title", ""), "has_tree": result.get("tree") is not None},
+            error=result.get("error", ""),
+        )
+        return result
+
+    async def network_requests(self) -> dict:
+        """Return and clear the accumulated network request/response log."""
+        assert self._browser_tool is not None
+        result = await self._browser_tool._dispatch("network_requests", {})
+        self._audit(
+            "network_requests",
+            {},
+            {"count": result.get("count", 0)},
+            error="",
+        )
+        return result
+
+    # ------------------------------------------------------------------
+    # Wave 3: Crawler bridge methods
+    # ------------------------------------------------------------------
+
+    async def map_site(self, url: str, limit: int = 100, search: str = None) -> dict:
+        """Breadth-first site URL discovery. Robots.txt compliant."""
+        assert self._browser_tool is not None
+        from .conduit_crawl import ConduitCrawler
+        crawler = ConduitCrawler(self._browser_tool, self._audit_log, self._session_id)
+        return await crawler.map_site(url, limit=limit, search=search)
+
+    async def crawl_site(
+        self,
+        url: str,
+        max_depth: int = 2,
+        include_paths: Optional[list] = None,
+        exclude_paths: Optional[list] = None,
+        limit: int = 20,
+    ) -> dict:
+        """Bulk page extraction with depth control. Every page logged to hash chain."""
+        assert self._browser_tool is not None
+        from .conduit_crawl import ConduitCrawler
+        crawler = ConduitCrawler(self._browser_tool, self._audit_log, self._session_id)
+        return await crawler.crawl_site(
+            url, max_depth=max_depth,
+            include_paths=include_paths, exclude_paths=exclude_paths,
+            limit=limit,
+        )
+
+    # ------------------------------------------------------------------
+    # Wave 3: Monitor bridge methods
+    # ------------------------------------------------------------------
+
+    async def fingerprint(self, url: str) -> dict:
+        """Navigate to URL and return a SHA-256 fingerprint (noise-stripped)."""
+        assert self._browser_tool is not None
+        from .conduit_monitor import ConduitMonitor
+        monitor = ConduitMonitor(self._browser_tool, self._audit_log, self._session_id)
+        return await monitor.fingerprint(url)
+
+    async def check_changed(self, url: str, previous_fingerprint: str) -> dict:
+        """Re-fingerprint URL, log PAGE_MUTATION event if content changed."""
+        assert self._browser_tool is not None
+        from .conduit_monitor import ConduitMonitor
+        monitor = ConduitMonitor(self._browser_tool, self._audit_log, self._session_id)
+        return await monitor.check_changed(url, previous_fingerprint)
+
+    # ------------------------------------------------------------------
+    # Wave 3: Proof bridge method
+    # ------------------------------------------------------------------
+
+    def export_proof(self, output_dir: str = None) -> dict:
+        """Export a self-verifiable session proof bundle (.tar.gz)."""
+        from .conduit_proof import ConduitProof
+        public_key_pem = f"# Ed25519 public key: {self._identity.public_key_hex}\n"
+        proof = ConduitProof(self._audit_log, self._session_id, public_key_pem)
+        return proof.export(output_dir=output_dir)
+
+    # ------------------------------------------------------------------
+    # execute() dispatcher (agent_loop entry point)
+    # ------------------------------------------------------------------
 
     async def execute(self, args: dict[str, Any]) -> str:
-        """Dispatch from agent_loop tool registry (same interface as BrowserTool.execute)."""
+        """Dispatch from agent_loop tool registry (same interface as BrowserTool.execute).
+
+        All action paths go through _audit() so every browser action is
+        recorded in both the billing ledger AND the SHA-256 hash chain.
+        """
         action = args.pop("action", "") if isinstance(args, dict) else ""
+        _ALL_ACTIONS = [
+            # Wave 0 + Wave 1
+            "navigate", "click", "type", "fill", "extract", "screenshot",
+            "scroll", "wait", "wait_for", "key_press", "hover",
+            "select_option", "handle_dialog", "navigate_back", "console_messages",
+            # Wave 2
+            "eval", "extract_main", "output_file", "output_to_file",
+            "accessibility_snapshot", "network_requests",
+            # Wave 3
+            "map", "crawl", "fingerprint", "check_changed", "export_proof",
+        ]
         dispatch: dict[str, Any] = {
-            "navigate":   lambda: self.navigate(args.get("url", "")),
-            "click":      lambda: self.click(args.get("selector", "")),
-            "type":       lambda: self.type_text(args.get("selector", ""), args.get("text", "")),
-            "extract":    lambda: self.extract(args.get("selector", "body")),
-            "screenshot": lambda: self.screenshot(args.get("path")),
+            # Wave 0 + Wave 1
+            "navigate":               lambda: self.navigate(args.get("url", "")),
+            "click":                  lambda: self.click(args.get("selector", "")),
+            "type":                   lambda: self.type_text(args.get("selector", ""), args.get("text", "")),
+            "fill":                   lambda: self.fill(args.get("selector", ""), args.get("text", "")),
+            "extract":                lambda: self.extract(args.get("selector", "body")),
+            "screenshot":             lambda: self.screenshot(args.get("path")),
+            "scroll":                 lambda: self.scroll(
+                                          args.get("direction", "down"),
+                                          args.get("amount", 300),
+                                          args.get("selector"),
+                                      ),
+            "wait":                   lambda: self.wait(args.get("seconds", 1.0)),
+            "wait_for":               lambda: self.wait_for(
+                                          args.get("condition", "selector"),
+                                          args.get("value", ""),
+                                          args.get("timeout_ms", 10000),
+                                      ),
+            "key_press":              lambda: self.key_press(args.get("key", "Enter")),
+            "hover":                  lambda: self.hover(args.get("selector", "")),
+            "select_option":          lambda: self.select_option(
+                                          args.get("selector", ""),
+                                          args.get("value", ""),
+                                          args.get("label", ""),
+                                          args.get("index"),
+                                      ),
+            "handle_dialog":          lambda: self.handle_dialog(
+                                          args.get("action", "accept"),
+                                          args.get("text", ""),
+                                      ),
+            "navigate_back":          lambda: self.navigate_back(),
+            "console_messages":       lambda: self.console_messages(),
+            # Wave 2: Extraction
+            "eval":                   lambda: self.eval(args.get("js_code", "")),
+            "extract_main":           lambda: self.extract_main(),
+            "output_file":            lambda: self.output_to_file(
+                                          args.get("filename", "output"),
+                                          args.get("content", ""),
+                                          args.get("fmt", "md"),
+                                      ),
+            "output_to_file":         lambda: self.output_to_file(
+                                          args.get("filename", "output"),
+                                          args.get("content", ""),
+                                          args.get("fmt", "md"),
+                                      ),
+            "accessibility_snapshot": lambda: self.accessibility_snapshot(),
+            "network_requests":       lambda: self.network_requests(),
+            # Wave 3: Crawler
+            "map":                    lambda: self.map_site(
+                                          args.get("url", ""),
+                                          limit=args.get("limit", 100),
+                                          search=args.get("search"),
+                                      ),
+            "crawl":                  lambda: self.crawl_site(
+                                          args.get("url", ""),
+                                          max_depth=args.get("max_depth", 2),
+                                          include_paths=args.get("include_paths"),
+                                          exclude_paths=args.get("exclude_paths"),
+                                          limit=args.get("limit", 20),
+                                      ),
+            # Wave 3: Monitor
+            "fingerprint":            lambda: self.fingerprint(args.get("url", "")),
+            "check_changed":          lambda: self.check_changed(
+                                          args.get("url", ""),
+                                          args.get("previous_fingerprint", ""),
+                                      ),
+            # Wave 3: Proof (sync method — wrapped to allow await)
+            "export_proof":           lambda: _sync_as_coro(self.export_proof, args.get("output_dir")),
         }
         handler = dispatch.get(action)
         if handler is None:
-            return json.dumps({"error": f"Unknown conduit action: {action!r}. Valid: {list(dispatch)}"})
+            return json.dumps({
+                "error": f"Unknown conduit action: {action!r}. Valid: {_ALL_ACTIONS}",
+            })
         try:
-            result = await handler()
+            coro_or_val = handler()
+            import asyncio as _asyncio
+            if _asyncio.iscoroutine(coro_or_val):
+                result = await coro_or_val
+            else:
+                result = coro_or_val
             return json.dumps(result)
         except BudgetExceededError as exc:
             return json.dumps({"error": str(exc), "budget_exceeded": True})

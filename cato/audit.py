@@ -304,6 +304,25 @@ class AuditLog:
 
         return ok
 
+    def get_session_rows(self, session_id: str) -> list[dict]:
+        """
+        Return all audit rows for *session_id* as a list of plain dicts.
+        Used by ConduitProof to build the exportable bundle.
+        """
+        self._ensure_connected()
+        assert self._conn is not None
+        rows = self._conn.execute(
+            """
+            SELECT id, session_id, action_type, tool_name, inputs_json,
+                   outputs_json, cost_cents, error, timestamp, prev_hash, row_hash
+            FROM audit_log
+            WHERE session_id = ?
+            ORDER BY id
+            """,
+            (session_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def close(self) -> None:
         """Close the database connection."""
         if self._conn:
