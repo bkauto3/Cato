@@ -308,6 +308,50 @@ class Gateway:
                     await ws.send(json.dumps({"type": "error", "text": f"vault save failed: {exc}"}))
             else:
                 await ws.send(json.dumps({"type": "error", "text": "vault_key and value required"}))
+
+        elif msg_type == "skill_list":
+            await ws.send(json.dumps({"type": "skill_list_result", "skills": self._list_skills()}))
+
+        elif msg_type == "skill_install":
+            url = data.get("url", "").strip()
+            if not url:
+                await ws.send(json.dumps({"type": "error", "text": "url required"}))
+            else:
+                result = await self._install_skill_from_url(url)
+                if result:
+                    await ws.send(json.dumps({"type": "skill_installed", "skill": result}))
+                else:
+                    await ws.send(json.dumps({"type": "error", "text": f"Failed to install skill from {url}"}))
+
+        elif msg_type == "skill_delete":
+            name = data.get("name", "").strip()
+            if not name:
+                await ws.send(json.dumps({"type": "error", "text": "name required"}))
+            else:
+                self._delete_skill(name)
+                await ws.send(json.dumps({"type": "skill_deleted", "name": name}))
+
+        elif msg_type == "agent_list":
+            await ws.send(json.dumps({"type": "agent_list_result", "agents": self._list_agents()}))
+
+        elif msg_type == "workspace_files":
+            await ws.send(json.dumps({"type": "workspace_files_result", "files": self._list_workspace_files()}))
+
+        elif msg_type == "workspace_file_get":
+            agent_id = data.get("agent_id", self._cfg.agent_name)
+            filename = data.get("filename", "").strip()
+            content  = self._read_workspace_file(agent_id, filename)
+            await ws.send(json.dumps({"type": "workspace_file_result", "name": filename, "content": content}))
+
+        elif msg_type == "workspace_file_save":
+            filename = data.get("filename", "").strip()
+            content  = data.get("content", "")
+            if filename:
+                self._write_workspace_file(filename, content)
+                await ws.send(json.dumps({"type": "workspace_file_saved", "filename": filename}))
+            else:
+                await ws.send(json.dumps({"type": "error", "text": "filename required"}))
+
         else:
             await ws.send(json.dumps({"type": "error", "text": f"unknown type: {msg_type}"}))
 
@@ -322,6 +366,161 @@ class Gateway:
     async def handle_ws_message(self, ws: Any, raw: str) -> None:
         """Handle an incoming WebSocket message (called by ui/server.py)."""
         await self._handle_ws_message(ws, raw)
+
+    # ------------------------------------------------------------------
+    # Skills helpers
+    # ------------------------------------------------------------------
+
+    def _skills_dir(self) -> "Path":
+        from pathlib import Path
+        d = Path.home() / ".cato" / "skills"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _list_skills(self) -> list:
+        skills = []
+        for skill_dir in self._skills_dir().iterdir():
+            if not skill_dir.is_dir():
+                continue
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                skill_md = skill_dir / "skill.md"
+            name = skill_dir.name
+            description = ""
+            version = ""
+            content = ""
+            if skill_md.exists():
+                try:
+                    content = skill_md.read_text(encoding="utf-8", errors="replace")
+                    for line in content.splitlines():
+                        if line.startswith("# "):
+                            name = line[2:].strip()
+                        if "version:" in line.lower():
+                            version = line.split(":", 1)[-1].strip()
+                        if line.startswith("> ") or (line and not line.startswith("#") and not description):
+                            description = line.lstrip("> ").strip()
+                except OSError:
+                    pass
+            skills.append({"name": name, "description": description, "version": version,
+                           "dir": skill_dir.name, "content": content})
+        return skills
+
+    async def _install_skill_from_url(self, url: str) -> "dict | None":
+        """Clone a git repo or fetch a raw SKILL.md into ~/.cato/skills/."""
+        import re
+        from pathlib import Path
+        skills_dir = self._skills_dir()
+        # Derive a slug from the URL
+        slug = re.sub(r"[^a-zA-Z0-9_-]", "-", url.rstrip("/").split("/")[-1])
+        dest = skills_dir / slug
+        dest.mkdir(parents=True, exist_ok=True)
+        try:
+            if url.endswith(".md"):
+                # Raw SKILL.md fetch
+                import urllib.request
+                with urllib.request.urlopen(url, timeout=15) as r:
+                    content = r.read().decode("utf-8", errors="replace")
+                (dest / "SKILL.md").write_text(content, encoding="utf-8")
+            else:
+                # Git clone
+                import asyncio
+                proc = await asyncio.create_subprocess_exec(
+                    "git", "clone", "--depth=1", url, str(dest),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(proc.wait(), timeout=60)
+                if proc.returncode != 0:
+                    return None
+        except Exception as exc:
+            logger.error("Skill install failed for %s: %s", url, exc)
+            return None
+        # Re-read and return skill info
+        skills = self._list_skills()
+        for s in skills:
+            if s["dir"] == slug:
+                return s
+        return {"name": slug, "description": "Installed from " + url, "version": "", "dir": slug, "content": ""}
+
+    def _delete_skill(self, name: str) -> None:
+        import shutil
+        for skill_dir in self._skills_dir().iterdir():
+            if skill_dir.is_dir() and skill_dir.name == name:
+                shutil.rmtree(skill_dir, ignore_errors=True)
+                logger.info("Skill deleted: %s", name)
+                return
+
+    # ------------------------------------------------------------------
+    # Agent / workspace file helpers
+    # ------------------------------------------------------------------
+
+    def _agents_dir(self) -> "Path":
+        from pathlib import Path
+        return Path.home() / ".cato" / "agents"
+
+    def _list_agents(self) -> list:
+        agents = []
+        agents_dir = self._agents_dir()
+        if not agents_dir.exists():
+            return agents
+        IDENTITY_FILES = ["SOUL.md", "IDENTITY.md", "MEMORY.md", "TOOLS.md",
+                          "USER.md", "AGENTS.md", "HEARTBEAT.md"]
+        for agent_dir in agents_dir.iterdir():
+            if not agent_dir.is_dir():
+                continue
+            workspace = agent_dir / "workspace"
+            if not workspace.exists():
+                workspace = agent_dir
+            found_files = [f.name for f in workspace.iterdir()
+                           if f.is_file() and f.suffix == ".md"
+                           and f.name.upper() in [x.upper() for x in IDENTITY_FILES]]
+            agents.append({
+                "id": agent_dir.name,
+                "workspace": str(workspace),
+                "identity_files": found_files,
+            })
+        return agents
+
+    def _workspace_dir(self) -> "Path":
+        from pathlib import Path
+        ws = getattr(self._cfg, "workspace_dir", None)
+        if ws:
+            return Path(ws)
+        return Path.home() / ".cato" / "workspace"
+
+    def _list_workspace_files(self) -> dict:
+        ws = self._workspace_dir()
+        result = {}
+        if not ws.exists():
+            return result
+        for f in ws.iterdir():
+            if f.is_file() and f.suffix == ".md":
+                try:
+                    result[f.name] = f.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    result[f.name] = ""
+        return result
+
+    def _read_workspace_file(self, agent_id: str, filename: str) -> str:
+        from pathlib import Path
+        # Try agent-specific workspace first
+        agent_ws = self._agents_dir() / agent_id / "workspace" / filename
+        if agent_ws.exists():
+            return agent_ws.read_text(encoding="utf-8", errors="replace")
+        agent_ws2 = self._agents_dir() / agent_id / filename
+        if agent_ws2.exists():
+            return agent_ws2.read_text(encoding="utf-8", errors="replace")
+        # Fall back to global workspace
+        p = self._workspace_dir() / filename
+        if p.exists():
+            return p.read_text(encoding="utf-8", errors="replace")
+        return ""
+
+    def _write_workspace_file(self, filename: str, content: str) -> None:
+        ws = self._workspace_dir()
+        ws.mkdir(parents=True, exist_ok=True)
+        (ws / filename).write_text(content, encoding="utf-8")
+        logger.info("Workspace file saved: %s", filename)
 
     async def _ws_broadcast(self, payload: dict) -> None:
         if not self._ws_clients:
