@@ -2,15 +2,31 @@
 **Version:** 1.0.0
 **Capabilities:** browser.navigate, browser.click, browser.type, browser.extract, browser.screenshot
 
+## Trigger Phrases
+"browse", "navigate to", "click", "extract page", "screenshot", "open url", "web page"
+
 ## Overview
-Conduit is Cato's built-in headless browser engine — enabled by default. Every browser action
-is logged to a SHA-256 hash-chained audit trail, signed with the agent's Ed25519 identity key,
-and enforced against the session budget cap before execution. All actions are free for local use.
+Conduit is Cato's built-in headless browser engine (enabled by default). All actions are
+hash-chained audit-logged, Ed25519-signed, and budget-checked before execution.
 
-## Activation
-Conduit is enabled by default (`conduit_enabled: true` in config.yaml). No flags needed.
+## Quick Reference
 
-## Instructions
+| Action | Tool call | Key params |
+|--------|-----------|------------|
+| Navigate | `browser navigate` | `url` |
+| Click | `browser click` | `selector` |
+| Type | `browser type` | `selector`, `text` |
+| Extract content | `browser extract` | `selector` (optional, default: body) |
+| Screenshot | `browser screenshot` | `path` (optional) |
+
+## Safety
+- IRREVERSIBLE actions require user confirmation (`safety_mode: strict` default)
+- Sensitive inputs (password, api_key, token) auto-redacted in logs
+- Budget cap enforced before every action
+
+<!-- COLD -->
+
+## Detailed Instructions
 
 ### Navigating to a URL
 Use the `browser` tool with `action: navigate` and `url`:
@@ -48,12 +64,8 @@ cato audit --verify         # tamper detection across all sessions
 cato receipt --session <id> # signed receipt with line-item log
 ```
 
-## Safety
-- IRREVERSIBLE actions (form submissions that send data externally) require user confirmation
-  when `safety_mode: strict` (default)
+## Extended Safety Notes
 - Non-interactive daemon mode: HIGH_STAKES actions denied by default (fail-safe)
-- Sensitive input keys (password, token, api_key, secret, bearer, etc.) auto-redacted in logs
-- Budget cap enforced before each action — action never executes if it would exceed cap
 
 ## Example Task: Research a topic
 1. `navigate` to a starting URL

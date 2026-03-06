@@ -14,3 +14,5 @@ When asked to send an email:
 6. Report success or any errors encountered
 
 IMPORTANT: Always ask for confirmation before clicking Send.
+
+<!-- COLD -->

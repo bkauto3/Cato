@@ -28,10 +28,13 @@ from typing import Any, Dict, Optional
 from aiohttp import web, WSMsgType
 
 try:
-    from cato.orchestrator.metrics import track_invocation
+    from cato.orchestrator.metrics import track_invocation, get_token_report
 except ImportError:  # pragma: no cover
     def track_invocation(*args, **kwargs) -> None:  # type: ignore[misc]
         pass
+
+    def get_token_report(**kwargs) -> dict:  # type: ignore[misc]
+        return {}
 
 # Module-level imports for model invocations — importable at module level so
 # that tests can patch them via `cato.api.websocket_handler.invoke_claude_api`.
@@ -305,12 +308,21 @@ async def coding_agent_ws_handler(request: web.Request) -> web.WebSocketResponse
             "timestamp":  int(time.time() * 1000),
         }))
 
-        # Record invocation metrics
+        # Record invocation metrics and emit token telemetry
         if primary:
             individual_latencies = {
                 r.get("model", "unknown"): r.get("latency_ms", 0.0)
                 for r in results if r is not None
             }
+
+            # Estimate token counts from the prompt and responses (rough approx:
+            # 4 chars per token — avoids importing tiktoken in the WS handler).
+            tokens_in_est = max(1, len(prompt) // 4)
+            tokens_out_est = max(0, sum(
+                len(r.get("response", "")) // 4
+                for r in results if r is not None
+            ))
+
             track_invocation(
                 task=task_text,
                 total_latency_ms=sum(individual_latencies.values()),
@@ -319,7 +331,31 @@ async def coding_agent_ws_handler(request: web.Request) -> web.WebSocketResponse
                 terminated_early=early_exit,
                 models_responded=sum(1 for r in results if r is not None),
                 individual_latencies=individual_latencies,
+                tokens_in=tokens_in_est,
+                tokens_out=tokens_out_est,
+                query_tier="tier1",
+                context_slots_used={
+                    "tier0": 0,
+                    "tier1_memory": 0,
+                    "tier1_skill": 0,
+                    "tier1_tools": 0,
+                    "history": tokens_in_est,
+                },
             )
+
+            # Emit token_telemetry event so the UI can display live usage
+            token_summary = get_token_report()
+            if not ws.closed:
+                await ws.send_str(_serialize_event("token_telemetry", {
+                    "turn_tokens_in": tokens_in_est,
+                    "turn_tokens_out": tokens_out_est,
+                    "session_total_in": token_summary.get("total_tokens_in", 0),
+                    "session_total_out": token_summary.get("total_tokens_out", 0),
+                    "avg_tokens_in_last_100": token_summary.get("avg_tokens_in_last_100", 0.0),
+                    "input_output_ratio": token_summary.get("ratio_in_to_out", 0.0),
+                    "estimated_cost_usd": token_summary.get("estimated_cost_usd", 0.0),
+                    "timestamp": int(time.time() * 1000),
+                }))
 
     await ws.close()
     return ws

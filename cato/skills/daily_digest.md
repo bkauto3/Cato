@@ -27,3 +27,5 @@ When asked for a daily digest (or triggered via cron):
 ---
 
 Send via the active channel (Telegram or WhatsApp).
+
+<!-- COLD -->
