@@ -2274,3 +2274,135 @@ def rollback_list(name: str, agent: str) -> None:
         ts = _dt.datetime.fromtimestamp(v["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
         table.add_row(str(i), v["content_hash"][:16] + "...", ts)
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# cato tools — Skill 8 (Irreversibility Classifier)
+# ---------------------------------------------------------------------------
+
+@main.group("tools")
+def tools_cmd() -> None:
+    """Inspect registered tools and their properties."""
+    pass
+
+
+@tools_cmd.command("reversibility")
+def cmd_tools_reversibility() -> None:
+    """List all registered tools with their reversibility scores."""
+    from cato.audit.reversibility_registry import ReversibilityRegistry
+    reg = ReversibilityRegistry.get_instance()
+    entries = reg.list_all()
+    safe_print(f"{'Tool':<25} {'Score':>6}  {'Blast Radius':<12}  Recovery")
+    safe_print("-" * 65)
+    for e in entries:
+        safe_print(
+            f"{e.tool_name:<25} {e.reversibility:>6.2f}  "
+            f"{e.blast_radius.value:<12}  {e.recovery_time}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# cato ledger — Skill 1 (Causal Action Ledger)
+# ---------------------------------------------------------------------------
+
+@main.group("ledger")
+def ledger_cmd() -> None:
+    """Inspect and verify the Causal Action Ledger."""
+    pass
+
+
+@ledger_cmd.command("verify")
+def cmd_ledger_verify() -> None:
+    """Verify chain integrity (hash linkage for all records)."""
+    from cato.audit.ledger import verify_chain
+    valid, msg = verify_chain()
+    safe_print(msg)
+    import sys as _sys
+    if not valid:
+        _sys.exit(1)
+
+
+@ledger_cmd.command("show")
+@click.option("--last", "n", default=10, show_default=True, type=int)
+@click.option("--session", "session_id", default=None)
+def cmd_ledger_show(n: int, session_id: "str | None") -> None:
+    """Show recent ledger records."""
+    from cato.audit.ledger import LedgerQuery
+    q = LedgerQuery()
+    if session_id:
+        records = q.by_session(session_id)
+    else:
+        records = q.last_n(n)
+    for r in records:
+        safe_print(
+            f"{r.timestamp}  {r.tool_name:<20}  "
+            f"conf={r.confidence_score:.2f}  rev={r.reversibility:.2f}"
+        )
+    q.close()
+
+
+# ---------------------------------------------------------------------------
+# cato token — Skill 5 (Delegated Authority Token System)
+# ---------------------------------------------------------------------------
+
+@main.group("token")
+def token_cmd() -> None:
+    """Manage delegation authority tokens."""
+    pass
+
+
+@token_cmd.command("create")
+@click.option("--category", "categories", required=True, help="Comma-separated action categories.")
+@click.option("--ceiling", default=500.0, show_default=True, type=float, help="Spending ceiling.")
+@click.option("--expires", default="72h", show_default=True, help="Expiry: Nh for hours, Nd for days.")
+def cmd_token_create(categories: str, ceiling: float, expires: str) -> None:
+    """Create and sign a new delegation token."""
+    import re
+    from cato.auth.token_store import TokenStore
+    m = re.match(r"(\d+)([hd])", expires)
+    if not m:
+        safe_print("Error: --expires must be like '72h' or '3d'")
+        return
+    secs = int(m.group(1)) * (3600 if m.group(2) == "h" else 86400)
+    cats = [c.strip() for c in categories.split(",")]
+    store = TokenStore()
+    token = store.create(
+        allowed_action_categories=cats,
+        spending_ceiling=ceiling,
+        expires_in_seconds=secs,
+    )
+    safe_print(f"Token created: {token.token_id}")
+    safe_print(f"  Categories: {', '.join(token.allowed_action_categories)}")
+    safe_print(f"  Ceiling: ${token.spending_ceiling:.2f}  Expires: {token.expires_at}")
+    store.close()
+
+
+@token_cmd.command("list")
+def cmd_token_list() -> None:
+    """List active delegation tokens."""
+    from cato.auth.token_store import TokenStore
+    store = TokenStore()
+    tokens = store.list_active()
+    if not tokens:
+        safe_print("No active tokens.")
+        store.close()
+        return
+    for t in tokens:
+        remaining = t.spending_ceiling - t.spending_used
+        safe_print(
+            f"{t.token_id[:16]}\u2026  expires={t.expires_at}  "
+            f"remaining=${remaining:.2f}  cats={','.join(t.allowed_action_categories)}"
+        )
+    store.close()
+
+
+@token_cmd.command("revoke")
+@click.argument("token_id")
+@click.option("--reason", default="", help="Revocation reason.")
+def cmd_token_revoke(token_id: str, reason: str) -> None:
+    """Revoke a delegation token."""
+    from cato.auth.token_store import TokenStore
+    store = TokenStore()
+    ok = store.revoke(token_id, reason=reason)
+    safe_print("Revoked." if ok else f"Token {token_id!r} not found.")
+    store.close()
