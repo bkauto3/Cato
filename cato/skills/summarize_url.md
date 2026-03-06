@@ -11,3 +11,5 @@ When given a URL:
 3. Extract the main content (ignore nav, ads, footers)
 4. Return a 3-5 sentence summary with key points as bullet list
 5. Include: title, publication date (if found), author (if found)
+
+<!-- COLD -->

@@ -19,3 +19,5 @@ When asked to add something to Notion:
      -d '{"parent": {"database_id": "{DATABASE_ID}"}, "properties": {...}}'
    ```
 4. Report the created page URL from the response
+
+<!-- COLD -->
