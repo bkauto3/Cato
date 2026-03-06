@@ -444,13 +444,53 @@ class Gateway:
             if skill_md.exists():
                 try:
                     content = skill_md.read_text(encoding="utf-8", errors="replace")
-                    for line in content.splitlines():
-                        if line.startswith("# "):
+                    lines = content.splitlines()
+
+                    # Parse YAML frontmatter (---...---) first
+                    fm_name = fm_desc = fm_version = ""
+                    body_start = 0
+                    if lines and lines[0].strip() == "---":
+                        i = 1
+                        while i < len(lines):
+                            if lines[i].strip() == "---":
+                                body_start = i + 1
+                                break
+                            key, _, val = lines[i].partition(":")
+                            key = key.strip().lower()
+                            val = val.strip().strip('"').strip("'")
+                            if key == "name":
+                                fm_name = val
+                            elif key == "description":
+                                fm_desc = val
+                            elif key == "version":
+                                fm_version = val
+                            i += 1
+
+                    if fm_name:
+                        name = fm_name
+                    if fm_desc:
+                        description = fm_desc
+                    if fm_version:
+                        version = fm_version
+
+                    # Fall back to markdown heading/body scan for non-frontmatter files
+                    for line in lines[body_start:]:
+                        if not fm_name and line.startswith("# "):
                             name = line[2:].strip()
-                        if "version:" in line.lower():
-                            version = line.split(":", 1)[-1].strip()
-                        if line.startswith("> ") or (line and not line.startswith("#") and not description):
-                            description = line.lstrip("> ").strip()
+                        ll = line.lower().strip()
+                        if not fm_version:
+                            if "**version:**" in ll:
+                                version = ll.split("**version:**", 1)[-1].strip().lstrip("*").strip()
+                            elif ll.startswith("version:"):
+                                version = ll.split(":", 1)[-1].strip()
+                        if not fm_desc and not description:
+                            stripped = line.strip()
+                            # skip bare metadata lines (key: value) and bold markers
+                            if (stripped and not stripped.startswith("#")
+                                    and not stripped.startswith("**")
+                                    and not (stripped.lower().startswith("version:") and " " not in stripped.split(":", 1)[-1].strip())):
+                                description = stripped.lstrip("> ").strip()
+
                 except OSError:
                     pass
             skills.append({"name": name, "description": description, "version": version,
