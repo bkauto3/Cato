@@ -1241,4 +1241,924 @@ def cmd_coding_agent(task: str, file: Optional[str], context: str, verbose: bool
         sys.exit(1)
     except Exception as e:
         safe_print(f"Error executing coding-agent: {e}")
-        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# cato schedule  (YAML-based cron scheduler management)
+# ---------------------------------------------------------------------------
+
+@main.group("schedule")
+def schedule_cmd() -> None:
+    """Manage YAML-based scheduled skills (~/.cato/schedules/)."""
+    pass
+
+
+@schedule_cmd.command("add")
+@click.option("--name", required=True, help="Unique schedule name (used as filename).")
+@click.option("--cron", required=True, help="Cron expression, e.g. '0 8 * * *'.")
+@click.option("--skill", required=True, help="Skill name to dispatch on fire.")
+@click.option("--budget-cap", default=100, show_default=True, type=int,
+              help="Per-execution budget cap in cents.")
+def schedule_add(name: str, cron: str, skill: str, budget_cap: int) -> None:
+    """Add a new YAML schedule.
+
+    \b
+    Example:
+        cato schedule add --name morning-brief --cron "0 8 * * *" --skill daily_digest
+    """
+    from cato.core.schedule_manager import Schedule, _SCHEDULES_DIR
+    try:
+        from croniter import croniter
+        if not croniter.is_valid(cron):
+            safe_print(f"Invalid cron expression: {cron!r}")
+            return
+    except ImportError:
+        safe_print("Warning: croniter not installed — cron expression not validated.")
+
+    _safe_name = name.replace(" ", "_").replace("/", "_")
+    existing_path = _CATO_DIR.parent / "schedules" / f"{_safe_name}.yaml"  # type: ignore[operator]
+    sched = Schedule(name=_safe_name, cron=cron, skill=skill, budget_cap=budget_cap)
+    sched.save(_SCHEDULES_DIR)
+    safe_print(f"Schedule added: {_safe_name!r}  cron={cron!r}  skill={skill!r}")
+
+
+@schedule_cmd.command("list")
+def schedule_list() -> None:
+    """List all schedules."""
+    from cato.core.schedule_manager import load_all_schedules
+    schedules = load_all_schedules()
+    if not schedules:
+        safe_print("No schedules found. Add one with: cato schedule add")
+        return
+
+    table = Table(title="Schedules", show_lines=True)
+    table.add_column("Name", style="cyan")
+    table.add_column("Cron")
+    table.add_column("Skill")
+    table.add_column("Budget Cap")
+    table.add_column("Enabled")
+
+    for s in schedules:
+        table.add_row(
+            s.name,
+            s.cron,
+            s.skill,
+            f"{s.budget_cap}c",
+            "[green]yes[/green]" if s.enabled else "[red]no[/red]",
+        )
+    console.print(table)
+
+
+@schedule_cmd.command("enable")
+@click.argument("name")
+def schedule_enable(name: str) -> None:
+    """Enable a schedule by name."""
+    from cato.core.schedule_manager import toggle_schedule
+    if toggle_schedule(name, enabled=True):
+        safe_print(f"Schedule {name!r} enabled.")
+    else:
+        safe_print(f"Schedule {name!r} not found.")
+
+
+@schedule_cmd.command("disable")
+@click.argument("name")
+def schedule_disable(name: str) -> None:
+    """Disable a schedule by name (keeps the file, skips execution)."""
+    from cato.core.schedule_manager import toggle_schedule
+    if toggle_schedule(name, enabled=False):
+        safe_print(f"Schedule {name!r} disabled.")
+    else:
+        safe_print(f"Schedule {name!r} not found.")
+
+
+@schedule_cmd.command("run")
+@click.argument("name")
+def schedule_run(name: str) -> None:
+    """Immediately fire a named schedule (ignores cron timing)."""
+    import asyncio as _asyncio
+    from cato.core.schedule_manager import SchedulerDaemon, load_schedule, _SCHEDULES_DIR
+    from cato.audit import AuditLog as _AuditLog
+
+    path = _SCHEDULES_DIR / f"{name}.yaml"
+    if not path.exists():
+        safe_print(f"Schedule {name!r} not found.")
+        return
+
+    sched = load_schedule(path)
+    if sched is None:
+        safe_print(f"Could not parse schedule {name!r}.")
+        return
+
+    audit = _AuditLog()
+    audit.connect()
+    daemon = SchedulerDaemon(audit_log=audit)
+
+    async def _run() -> None:
+        ok = await daemon.fire_now(name)
+        if ok:
+            safe_print(f"Schedule {name!r} fired (skill={sched.skill!r}).")
+        else:
+            safe_print(f"Could not fire {name!r}.")
+
+    _asyncio.run(_run())
+
+
+@schedule_cmd.command("history")
+@click.argument("name")
+@click.option("--limit", default=20, show_default=True, type=int, help="Max rows to show.")
+def schedule_history(name: str, limit: int) -> None:
+    """Show last N execution records for a schedule (from audit log)."""
+    from cato.audit import AuditLog as _AuditLog
+    import sqlite3 as _sqlite3
+
+    audit = _AuditLog()
+    audit.connect()
+    assert audit._conn is not None  # noqa: SLF001
+
+    session_id = f"sched-{name}"
+    rows = audit._conn.execute(  # noqa: SLF001
+        """
+        SELECT id, action_type, tool_name, outputs_json, error, timestamp
+        FROM audit_log
+        WHERE session_id = ? AND action_type = 'cron_fire'
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (session_id, limit),
+    ).fetchall()
+
+    if not rows:
+        safe_print(f"No execution history found for schedule {name!r}.")
+        return
+
+    import datetime as _dt
+    table = Table(title=f"History: {name}", show_lines=True)
+    table.add_column("ID", style="dim")
+    table.add_column("Tool")
+    table.add_column("Status")
+    table.add_column("Error")
+    table.add_column("Timestamp")
+
+    for r in rows:
+        ts = _dt.datetime.fromtimestamp(r["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            import json as _json
+            out = _json.loads(r["outputs_json"])
+            status = out.get("status", "?")
+        except Exception:
+            status = r["outputs_json"][:20]
+        table.add_row(
+            str(r["id"]),
+            r["tool_name"],
+            status,
+            r["error"] or "",
+            ts,
+        )
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# cato search  (Web-Search-Plus)
+# ---------------------------------------------------------------------------
+
+@main.command("search")
+@click.argument("query")
+@click.option("--engine", "query_type",
+              type=click.Choice(["code", "news", "academic", "general"], case_sensitive=False),
+              default=None, help="Override query type (auto-detected if omitted).")
+@click.option("--depth", type=click.Choice(["normal", "deep"], case_sensitive=False),
+              default="normal", show_default=True, help="Search depth.")
+@click.option("--max-results", default=10, show_default=True, type=int,
+              help="Max results to display.")
+def cmd_search(query: str, query_type: Optional[str], depth: str, max_results: int) -> None:
+    """Search the web using the best engine for the query type.
+
+    \b
+    Examples:
+        cato search "Python asyncio tutorial" --engine code
+        cato search "latest AI news" --engine news --depth deep
+        cato search "CRISPR 2024" --engine academic
+    """
+    import asyncio as _asyncio
+    from cato.tools.web_search import WebSearchTool, classify_query
+
+    detected: str = query_type or classify_query(query)
+
+    vault_path = _CATO_DIR / "vault.enc"
+    vault: Optional[Vault] = None
+    if vault_path.exists():
+        try:
+            vault = Vault(vault_path=vault_path)
+        except Exception:
+            pass
+
+    tool = WebSearchTool(vault=vault)
+
+    async def _run():
+        return await tool.search(
+            query=query,
+            query_type=detected,  # type: ignore[arg-type]
+            depth=depth,          # type: ignore[arg-type]
+            max_results=max_results,
+        )
+
+    try:
+        results = _asyncio.run(_run())
+    except Exception as exc:
+        safe_print(f"Search failed: {exc}")
+        return
+
+    if not results:
+        safe_print("No results found.")
+        return
+
+    safe_print(f"\nSearch: {query!r}  [type={detected}, depth={depth}]")
+    safe_print("-" * 60)
+
+    table = Table(show_lines=True)
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Title", min_width=30)
+    table.add_column("URL", style="cyan")
+    table.add_column("Engine", style="dim")
+    table.add_column("Conf", justify="right")
+
+    for i, r in enumerate(results):
+        table.add_row(
+            str(i + 1),
+            r.title[:60],
+            r.url[:60],
+            r.source_engine,
+            f"{r.confidence:.2f}",
+        )
+    console.print(table)
+
+    safe_print("\nSnippets:")
+    for i, r in enumerate(results[:3]):
+        safe_print(f"\n[{i+1}] {r.title}")
+        safe_print(f"    {r.snippet[:200]}")
+
+
+# ---------------------------------------------------------------------------
+# cato sessions / cato session  (Context-Anchor Session Checkpoints, Skill 8)
+# ---------------------------------------------------------------------------
+
+@main.command("sessions")
+def cmd_sessions_list() -> None:
+    """List all session checkpoints."""
+    from cato.core.session_checkpoint import SessionCheckpoint
+    ckpt = SessionCheckpoint()
+    ckpt.connect()
+    sessions = ckpt.list_all()
+    ckpt.close()
+
+    if not sessions:
+        safe_print("No session checkpoints found.")
+        return
+
+    table = Table(title="Session Checkpoints", show_lines=True)
+    table.add_column("Session ID", style="cyan")
+    table.add_column("Task")
+    table.add_column("Checkpoint At")
+    table.add_column("Tokens")
+
+    for s in sessions:
+        table.add_row(
+            s["session_id"],
+            (s.get("task_description") or "")[:50],
+            s.get("checkpoint_at", ""),
+            str(s.get("token_count", 0)),
+        )
+    console.print(table)
+
+
+@main.group("session")
+def session_cmd() -> None:
+    """Manage individual session checkpoints."""
+    pass
+
+
+@session_cmd.command("resume")
+@click.argument("session_id")
+def session_resume(session_id: str) -> None:
+    """Show the compressed summary for a session checkpoint (for context injection)."""
+    from cato.core.session_checkpoint import SessionCheckpoint
+    ckpt = SessionCheckpoint()
+    ckpt.connect()
+    summary = ckpt.get_summary(session_id)
+    ckpt.close()
+
+    if not summary:
+        safe_print(f"No checkpoint found for session {session_id!r}.")
+        return
+
+    safe_print(summary)
+
+
+@session_cmd.command("delete")
+@click.argument("session_id")
+@click.confirmation_option(prompt="Delete this checkpoint?")
+def session_delete(session_id: str) -> None:
+    """Delete a session checkpoint."""
+    from cato.core.session_checkpoint import SessionCheckpoint
+    ckpt = SessionCheckpoint()
+    ckpt.connect()
+    ok = ckpt.delete(session_id)
+    ckpt.close()
+
+    if ok:
+        safe_print(f"Checkpoint for {session_id!r} deleted.")
+    else:
+        safe_print(f"No checkpoint found for {session_id!r}.")
+
+
+# ---------------------------------------------------------------------------
+# cato github  (Super-GitHub 3-Model PR Review, Skill 3)
+# ---------------------------------------------------------------------------
+
+@main.group("github")
+def github_cmd() -> None:
+    """GitHub operations with optional 3-model AI review pipeline."""
+    pass
+
+
+@github_cmd.command("pr")
+@click.argument("subcommand", type=click.Choice(["review", "merge"]))
+@click.argument("target")
+@click.option("--method", type=click.Choice(["squash", "merge", "rebase"]),
+              default="squash", show_default=True,
+              help="Merge method (only used with 'merge').")
+def github_pr(subcommand: str, target: str, method: str) -> None:
+    """PR review or merge operations.
+
+    \b
+    Examples:
+        cato github pr review 123
+        cato github pr review https://github.com/org/repo/pull/123
+        cato github pr merge 42 --method squash
+    """
+    import asyncio as _asyncio
+    from cato.tools.github_tool import GitHubTool
+
+    vault_path = _CATO_DIR / "vault.enc"
+    vault: Optional[Vault] = None
+    if vault_path.exists():
+        try:
+            vault = Vault(vault_path=vault_path)
+        except Exception:
+            pass
+
+    gh = GitHubTool(vault=vault)
+
+    if subcommand == "review":
+        async def _review():
+            result = await gh.pr_review(target)
+            safe_print(result)
+        _asyncio.run(_review())
+    elif subcommand == "merge":
+        # extract PR number from URL or use directly
+        try:
+            pr_num = int(target.rstrip("/").split("/")[-1])
+        except ValueError:
+            safe_print(f"Invalid PR number or URL: {target!r}")
+            return
+        async def _merge():
+            result = await gh.pr_merge(pr_num, method=method)
+            safe_print(result)
+        _asyncio.run(_merge())
+
+
+@github_cmd.command("issue")
+@click.argument("subcommand", type=click.Choice(["create", "list"]))
+@click.option("--title", default="", help="Issue title (for create).")
+@click.option("--body", default="", help="Issue body (for create).")
+def github_issue(subcommand: str, title: str, body: str) -> None:
+    """Issue operations.
+
+    \b
+    Examples:
+        cato github issue list
+        cato github issue create --title "Bug: crash on startup" --body "Steps to reproduce..."
+    """
+    import asyncio as _asyncio
+    from cato.tools.github_tool import GitHubTool
+
+    vault_path = _CATO_DIR / "vault.enc"
+    vault: Optional[Vault] = None
+    if vault_path.exists():
+        try:
+            vault = Vault(vault_path=vault_path)
+        except Exception:
+            pass
+
+    gh = GitHubTool(vault=vault)
+
+    if subcommand == "create":
+        if not title:
+            safe_print("--title is required for issue create.")
+            return
+        async def _create():
+            result = await gh.issue_create(title=title, body=body)
+            safe_print(result)
+        _asyncio.run(_create())
+    else:
+        async def _list():
+            result = await gh.issue_list()
+            safe_print(result)
+        _asyncio.run(_list())
+
+
+@github_cmd.command("release")
+@click.option("--tag", required=True, help="Tag name, e.g. v1.2.0.")
+@click.option("--notes", default="", help="Release notes.")
+def github_release(tag: str, notes: str) -> None:
+    """Create a GitHub release.
+
+    \b
+    Example:
+        cato github release --tag v1.2.0 --notes "Bug fixes"
+    """
+    import asyncio as _asyncio
+    from cato.tools.github_tool import GitHubTool
+
+    vault_path = _CATO_DIR / "vault.enc"
+    vault: Optional[Vault] = None
+    if vault_path.exists():
+        try:
+            vault = Vault(vault_path=vault_path)
+        except Exception:
+            pass
+
+    gh = GitHubTool(vault=vault)
+
+    async def _run():
+        result = await gh.release_create(tag=tag, notes=notes)
+        safe_print(result)
+
+    _asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# cato memory  (Mem0: Local-First Semantic Memory, Skill 2)
+# ---------------------------------------------------------------------------
+
+@main.group("memory")
+def memory_cmd() -> None:
+    """Manage the Mem0 semantic fact store."""
+    pass
+
+
+@memory_cmd.command("list")
+@click.option("--agent", default="default", show_default=True, help="Agent workspace name.")
+@click.option("--limit", default=50, show_default=True, type=int, help="Max facts to show.")
+def memory_list(agent: str, limit: int) -> None:
+    """Display all stored facts with key, confidence, and last_reinforced."""
+    import time as _time
+    from cato.core.memory import MemorySystem
+
+    mem = MemorySystem(agent_id=agent)
+    facts = mem.load_top_facts(n=limit)
+    mem.close()
+
+    if not facts:
+        safe_print("No facts stored yet.")
+        return
+
+    table = Table(title=f"Mem0 Facts ({agent})", show_lines=True)
+    table.add_column("Key", style="cyan")
+    table.add_column("Value")
+    table.add_column("Confidence", justify="right")
+    table.add_column("Last Reinforced")
+
+    for f in facts:
+        lr = f.get("last_reinforced")
+        if lr:
+            from datetime import datetime as _dt
+            lr_str = _dt.fromtimestamp(lr).strftime("%Y-%m-%d %H:%M")
+        else:
+            lr_str = "—"
+        table.add_row(
+            str(f["key"]),
+            str(f["value"])[:80],
+            f"{f.get('confidence', 1.0):.3f}",
+            lr_str,
+        )
+    console.print(table)
+
+
+@memory_cmd.command("forget")
+@click.argument("key", required=False, default=None)
+@click.option("--all", "forget_all", is_flag=True, default=False, help="Delete ALL facts.")
+@click.option("--agent", default="default", show_default=True, help="Agent workspace name.")
+def memory_forget(key: Optional[str], forget_all: bool, agent: str) -> None:
+    """Delete a fact by key, or all facts with --all."""
+    from cato.core.memory import MemorySystem
+
+    mem = MemorySystem(agent_id=agent)
+
+    if forget_all:
+        if not click.confirm(f"Delete ALL facts for agent [{agent}]?", default=False):
+            safe_print("Aborted.")
+            mem.close()
+            return
+        n = mem.forget_all_facts()
+        mem.close()
+        safe_print(f"Deleted {n} fact(s).")
+        return
+
+    if not key:
+        safe_print("Provide a KEY argument or use --all to delete all facts.")
+        mem.close()
+        return
+
+    ok = mem.forget_fact(key)
+    mem.close()
+    if ok:
+        safe_print(f"Fact '{key}' deleted.")
+    else:
+        safe_print(f"Fact '{key}' not found.")
+
+
+# ---------------------------------------------------------------------------
+# cato flow  (Clawflows: Proactive Trigger Registry, Skill 5)
+# ---------------------------------------------------------------------------
+
+@main.group("flow")
+def flow_cmd() -> None:
+    """Manage Clawflows proactive trigger flows."""
+    pass
+
+
+@flow_cmd.command("list")
+def flow_list() -> None:
+    """List all available flows."""
+    from cato.orchestrator.clawflows import FlowEngine
+    engine = FlowEngine()
+    flows = engine.list_flows()
+    if not flows:
+        safe_print("No flows found. Place YAML files in ~/.cato/flows/")
+        return
+
+    table = Table(title="Clawflows", show_lines=True)
+    table.add_column("Name", style="cyan")
+    table.add_column("Trigger Type")
+    table.add_column("Steps")
+    table.add_column("Budget Cap")
+
+    for f in flows:
+        table.add_row(
+            f["name"],
+            f.get("trigger_type", "manual"),
+            str(f.get("step_count", 0)),
+            str(f.get("budget_cap", "—")),
+        )
+    console.print(table)
+
+
+@flow_cmd.command("run")
+@click.argument("name")
+def flow_run(name: str) -> None:
+    """Run a flow immediately."""
+    import asyncio as _asyncio
+    from cato.orchestrator.clawflows import FlowEngine
+
+    engine = FlowEngine()
+
+    async def _run():
+        result = await engine.run_flow(name)
+        safe_print(f"Flow '{name}' completed: status={result.status}")
+        if result.error:
+            safe_print(f"Error: {result.error}")
+        for i, out in enumerate(result.step_outputs):
+            safe_print(f"  Step {i}: {str(out)[:120]}")
+
+    _asyncio.run(_run())
+
+
+@flow_cmd.command("enable")
+@click.argument("name")
+def flow_enable(name: str) -> None:
+    """Enable a flow (sets active: true in its YAML)."""
+    from cato.orchestrator.clawflows import FlowEngine
+    engine = FlowEngine()
+    ok = engine.set_active(name, active=True)
+    if ok:
+        safe_print(f"Flow '{name}' enabled.")
+    else:
+        safe_print(f"Flow '{name}' not found.")
+
+
+@flow_cmd.command("disable")
+@click.argument("name")
+def flow_disable(name: str) -> None:
+    """Disable a flow (sets active: false in its YAML)."""
+    from cato.orchestrator.clawflows import FlowEngine
+    engine = FlowEngine()
+    ok = engine.set_active(name, active=False)
+    if ok:
+        safe_print(f"Flow '{name}' disabled.")
+    else:
+        safe_print(f"Flow '{name}' not found.")
+
+
+@flow_cmd.command("status")
+def flow_status() -> None:
+    """Show IN_PROGRESS flows with current step."""
+    from cato.orchestrator.clawflows import FlowEngine
+    engine = FlowEngine()
+    in_progress = engine.get_in_progress_flows()
+    if not in_progress:
+        safe_print("No flows currently in progress.")
+        return
+
+    table = Table(title="In-Progress Flows", show_lines=True)
+    table.add_column("Flow Name", style="cyan")
+    table.add_column("Current Step", justify="right")
+    table.add_column("Status")
+    table.add_column("Started At")
+
+    import datetime as _dt
+    for row in in_progress:
+        started = _dt.datetime.fromtimestamp(row["started_at"]).strftime("%Y-%m-%d %H:%M")
+        table.add_row(
+            row["flow_name"],
+            str(row["current_step"]),
+            row["status"],
+            started,
+        )
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# cato exec  (Python Execution Sandbox, Skill 7)
+# ---------------------------------------------------------------------------
+
+@main.command("exec")
+@click.argument("code")
+@click.option("--timeout", default=30.0, show_default=True, type=float,
+              help="Execution timeout in seconds.")
+def cmd_exec(code: str, timeout: float) -> None:
+    """Execute Python code in the sandbox and print output.
+
+    \b
+    Example:
+        cato exec "print(1 + 1)"
+        cato exec "import math; print(math.pi)"
+    """
+    import asyncio as _asyncio
+    from cato.tools.python_executor import PythonExecutor, SandboxViolationError
+
+    executor = PythonExecutor()
+
+    async def _run():
+        try:
+            result = await executor.execute(code, timeout_sec=timeout)
+            if result.stdout:
+                safe_print(result.stdout)
+            if result.stderr:
+                safe_print(f"[stderr] {result.stderr}")
+            if not result.success:
+                safe_print(f"[exit code {result.returncode}]")
+        except SandboxViolationError as e:
+            safe_print(f"Sandbox violation: {e}")
+
+    _asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# cato graph  (Knowledge Graph, Skill 9)
+# ---------------------------------------------------------------------------
+
+@main.group("graph")
+def graph_cmd() -> None:
+    """Query the SQLite knowledge graph."""
+    pass
+
+
+@graph_cmd.command("query")
+@click.argument("label")
+@click.option("--depth", default=3, show_default=True, type=int,
+              help="Max hop depth for graph traversal.")
+@click.option("--agent", default="default", show_default=True, help="Agent workspace name.")
+def graph_query(label: str, depth: int, agent: str) -> None:
+    """Multi-hop graph traversal from LABEL.
+
+    \b
+    Example:
+        cato graph query config.py --depth 2
+    """
+    from cato.core.memory import MemorySystem
+
+    mem = MemorySystem(agent_id=agent)
+    results = mem.query_graph(label, depth=depth)
+    mem.close()
+
+    if not results:
+        safe_print(f"No nodes reachable from '{label}' within depth {depth}.")
+        return
+
+    table = Table(title=f"Graph: {label} (depth={depth})", show_lines=True)
+    table.add_column("Label", style="cyan")
+    table.add_column("Type")
+    table.add_column("Relation")
+    table.add_column("Weight", justify="right")
+    table.add_column("Hop", justify="right")
+
+    for r in results:
+        table.add_row(
+            r["label"],
+            r["type"],
+            r["relation_type"],
+            f"{r['weight']:.1f}",
+            str(r["depth"]),
+        )
+    console.print(table)
+
+
+@graph_cmd.command("related")
+@click.argument("label")
+@click.option("--max-hops", default=2, show_default=True, type=int,
+              help="Maximum hops to consider.")
+@click.option("--agent", default="default", show_default=True, help="Agent workspace name.")
+def graph_related(label: str, max_hops: int, agent: str) -> None:
+    """Show related concepts for LABEL ranked by edge weight.
+
+    \b
+    Example:
+        cato graph related alice --max-hops 2
+    """
+    from cato.core.memory import MemorySystem
+
+    mem = MemorySystem(agent_id=agent)
+    results = mem.related_concepts(label, max_hops=max_hops)
+    mem.close()
+
+    if not results:
+        safe_print(f"No neighbours found for '{label}'.")
+        return
+
+    table = Table(title=f"Related to: {label}", show_lines=True)
+    table.add_column("Label", style="cyan")
+    table.add_column("Type")
+    table.add_column("Weight", justify="right")
+    table.add_column("Hop", justify="right")
+
+    for r in results:
+        table.add_row(
+            r["label"],
+            r["type"],
+            f"{r['weight']:.1f}",
+            str(r["depth"]),
+        )
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# cato improve  (Self-Improving Agent, Skill 1)
+# ---------------------------------------------------------------------------
+
+@main.group("improve")
+def improve_cmd() -> None:
+    """Self-improvement cycle for skill documentation."""
+    pass
+
+
+@improve_cmd.command("run")
+@click.option("--allow-skill-writes", is_flag=True, default=False,
+              help="Actually rewrite SKILL.md files when consensus reached.")
+@click.option("--agent", default="default", show_default=True, help="Agent workspace name.")
+def improve_run(allow_skill_writes: bool, agent: str) -> None:
+    """Run the improvement cycle (uses 3-model consensus).
+
+    \b
+    Example:
+        cato improve run --allow-skill-writes
+    """
+    import asyncio as _asyncio
+    from cato.core.memory import MemorySystem
+    from cato.orchestrator.skill_improvement_cycle import run_improvement_cycle
+
+    mem = MemorySystem(agent_id=agent)
+
+    async def _run():
+        stats = await run_improvement_cycle(mem, allow_writes=allow_skill_writes)
+        safe_print(f"Improvement cycle complete:")
+        safe_print(f"  Candidates reviewed: {stats['candidates_reviewed']}")
+        safe_print(f"  Skills updated:      {stats['skills_updated']}")
+        safe_print(f"  Blocked:             {stats['blocked']}")
+
+    try:
+        _asyncio.run(_run())
+    finally:
+        mem.close()
+
+
+@improve_cmd.command("dry-run")
+@click.option("--agent", default="default", show_default=True, help="Agent workspace name.")
+def improve_dry_run(agent: str) -> None:
+    """Show proposed improvements without applying them.
+
+    \b
+    Example:
+        cato improve dry-run
+    """
+    import asyncio as _asyncio
+    from cato.core.memory import MemorySystem
+    from cato.orchestrator.skill_improvement_cycle import run_improvement_cycle
+
+    mem = MemorySystem(agent_id=agent)
+
+    async def _run():
+        stats = await run_improvement_cycle(mem, allow_writes=False)
+        safe_print(f"Dry-run complete (no files written):")
+        safe_print(f"  Candidates reviewed: {stats['candidates_reviewed']}")
+        safe_print(f"  Would update:        {stats['candidates_reviewed'] - stats['blocked']}")
+        safe_print(f"  Blocked:             {stats['blocked']}")
+
+    try:
+        _asyncio.run(_run())
+    finally:
+        mem.close()
+
+
+# ---------------------------------------------------------------------------
+# cato rollback  (Skill version rollback, Skill 1)
+# ---------------------------------------------------------------------------
+
+@main.group("rollback")
+def rollback_cmd() -> None:
+    """Manage skill version history and rollbacks."""
+    pass
+
+
+@rollback_cmd.command("skill")
+@click.argument("name")
+@click.option("--hash", "content_hash", default=None,
+              help="Specific content hash to restore (omit for latest backup).")
+@click.option("--agent", default="default", show_default=True, help="Agent workspace name.")
+def rollback_skill(name: str, content_hash: Optional[str], agent: str) -> None:
+    """Restore a previous SKILL.md version.
+
+    \b
+    Example:
+        cato rollback skill knowledge_graph --hash abc123
+        cato rollback skill knowledge_graph
+    """
+    from cato.core.memory import MemorySystem
+    from cato.orchestrator.skill_improvement_cycle import list_skill_versions, restore_skill
+
+    mem = MemorySystem(agent_id=agent)
+    versions = list_skill_versions(name, mem)
+    mem.close()
+
+    if not versions:
+        safe_print(f"No versions found for skill '{name}'.")
+        return
+
+    target_hash = content_hash or versions[0]["content_hash"]
+
+    skill_path = Path(__file__).parent / "skills" / name / "SKILL.md"
+    if not skill_path.parent.exists():
+        safe_print(f"Skill directory not found: {skill_path.parent}")
+        return
+
+    mem2 = MemorySystem(agent_id=agent)
+    ok = restore_skill(name, target_hash, skill_path, mem2)
+    mem2.close()
+
+    if ok:
+        safe_print(f"Skill '{name}' restored from hash {target_hash[:12]}.")
+    else:
+        safe_print(f"Hash {target_hash[:12]} not found for skill '{name}'.")
+
+
+@rollback_cmd.command("list")
+@click.argument("name")
+@click.option("--agent", default="default", show_default=True, help="Agent workspace name.")
+def rollback_list(name: str, agent: str) -> None:
+    """List available backup versions for a skill.
+
+    \b
+    Example:
+        cato rollback list knowledge_graph
+    """
+    import datetime as _dt
+    from cato.core.memory import MemorySystem
+    from cato.orchestrator.skill_improvement_cycle import list_skill_versions
+
+    mem = MemorySystem(agent_id=agent)
+    versions = list_skill_versions(name, mem)
+    mem.close()
+
+    if not versions:
+        safe_print(f"No versions found for skill '{name}'.")
+        return
+
+    table = Table(title=f"Versions: {name}", show_lines=True)
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Hash", style="cyan")
+    table.add_column("Saved At")
+
+    for i, v in enumerate(versions):
+        ts = _dt.datetime.fromtimestamp(v["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+        table.add_row(str(i), v["content_hash"][:16] + "...", ts)
+    console.print(table)

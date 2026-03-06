@@ -201,6 +201,12 @@ class Gateway:
         session_id = task["session_id"]
         channel    = task["channel"]
         agent_id   = task.get("agent_id", self._cfg.agent_name)
+
+        # Clawflows: if task has 'flow' key, route to FlowEngine (Skill 5)
+        if "flow" in task:
+            await self._process_flow_task(task)
+            return
+
         try:
             # Lazy-init: build agent loop on first message (avoids GIL block at startup)
             await self._ensure_agent_loop()
@@ -219,6 +225,26 @@ class Gateway:
         except Exception as exc:
             logger.error("session=%s processing error: %s", session_id, exc, exc_info=True)
             await self.send(session_id, f"[internal error: {exc}]", channel)
+
+    async def _process_flow_task(self, task: dict) -> None:
+        """Route a task dict with 'flow' key to FlowEngine (Skill 5 — Clawflows)."""
+        session_id = task.get("session_id", "flow-default")
+        channel    = task.get("channel", "web")
+        flow_name  = task["flow"]
+        try:
+            from .orchestrator.clawflows import FlowEngine
+            engine = FlowEngine()
+            result = await engine.run_flow(flow_name, trigger_context=task)
+            text = (
+                f"Flow '{flow_name}' {result.status}. "
+                f"Steps completed: {len(result.step_outputs)}."
+            )
+            if result.error:
+                text += f" Error: {result.error}"
+            await self.send(session_id, text, channel)
+        except Exception as exc:
+            logger.error("Flow task %s error: %s", flow_name, exc, exc_info=True)
+            await self.send(session_id, f"[flow error: {exc}]", channel)
 
     # ------------------------------------------------------------------
     # Lane management

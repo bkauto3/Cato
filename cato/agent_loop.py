@@ -63,6 +63,163 @@ def register_tool(name: str, fn: Callable) -> None:
     _TOOL_REGISTRY[name] = fn
 
 
+# ---------------------------------------------------------------------------
+# Web-Search-Plus tool registrations (Skill 6)
+# ---------------------------------------------------------------------------
+
+def _register_web_search_tools(vault: Any = None) -> None:
+    """Register web.search / web.code / web.news / academic.* tool actions."""
+    try:
+        from .tools.web_search import WebSearchTool
+    except ImportError:
+        return
+
+    tool = WebSearchTool(vault=vault)
+
+    async def _web_search(args: dict) -> str:
+        results = await tool.search(query=args.get("query", ""), query_type="general")
+        return "\n".join(f"[{r.rank+1}] {r.title}\n    {r.url}\n    {r.snippet}" for r in results[:5])
+
+    async def _web_code(args: dict) -> str:
+        results = await tool.search(query=args.get("query", ""), query_type="code")
+        return "\n".join(f"[{r.rank+1}] {r.title}\n    {r.url}\n    {r.snippet}" for r in results[:5])
+
+    async def _web_news(args: dict) -> str:
+        results = await tool.search(query=args.get("query", ""), query_type="news")
+        return "\n".join(f"[{r.rank+1}] {r.title}\n    {r.url}\n    {r.snippet}" for r in results[:5])
+
+    async def _academic_arxiv(args: dict) -> str:
+        results = await tool._search_arxiv(args.get("query", ""))
+        return "\n".join(f"[{r.rank+1}] {r.title}\n    {r.url}\n    {r.snippet}" for r in results[:5])
+
+    async def _academic_semantic_scholar(args: dict) -> str:
+        results = await tool._search_semantic_scholar(args.get("query", ""))
+        return "\n".join(f"[{r.rank+1}] {r.title}\n    {r.url}\n    {r.snippet}" for r in results[:5])
+
+    async def _academic_pubmed(args: dict) -> str:
+        results = await tool._search_pubmed(args.get("query", ""))
+        return "\n".join(f"[{r.rank+1}] {r.title}\n    {r.url}\n    {r.snippet}" for r in results[:5])
+
+    register_tool("web.search", _web_search)
+    register_tool("web.code", _web_code)
+    register_tool("web.news", _web_news)
+    register_tool("academic.arxiv", _academic_arxiv)
+    register_tool("academic.semantic_scholar", _academic_semantic_scholar)
+    register_tool("academic.pubmed", _academic_pubmed)
+
+
+def _register_python_executor_tools() -> None:
+    """Register python.execute tool action (Skill 7)."""
+    try:
+        from .tools.python_executor import PythonExecutor, SandboxViolationError
+    except ImportError:
+        return
+
+    executor = PythonExecutor()
+
+    async def _python_execute(args: dict) -> str:
+        code = args.get("code", "")
+        timeout = float(args.get("timeout_sec", 30.0))
+        try:
+            result = await executor.execute(code, timeout_sec=timeout)
+            parts = []
+            if result.stdout:
+                parts.append(f"stdout:\n{result.stdout}")
+            if result.stderr:
+                parts.append(f"stderr:\n{result.stderr}")
+            parts.append(f"returncode: {result.returncode}")
+            return "\n".join(parts)
+        except SandboxViolationError as exc:
+            return f"[sandbox violation: {exc}]"
+
+    register_tool("python.execute", _python_execute)
+
+
+def _register_memory_tools(memory: Any) -> None:
+    """Register memory.search and memory.federated tool actions (Skill 4 / QMD)."""
+    try:
+        from .core.retrieval import HybridRetriever
+    except ImportError:
+        return
+
+    retriever = HybridRetriever(memory=memory)
+
+    async def _memory_search(args: dict) -> str:
+        query = args.get("query", "")
+        top_k = int(args.get("top_k", 5))
+        results = await retriever.search(query, top_k=top_k)
+        return "\n".join(
+            f"[{r.get('source', '?')}] {r.get('text', '')[:200]}" for r in results
+        )
+
+    async def _memory_federated(args: dict) -> str:
+        query = args.get("query", "")
+        top_k = int(args.get("top_k", 10))
+        results = await retriever.federated_search(query, top_k=top_k)
+        return "\n".join(
+            f"[{r.get('source', '?')}] {r.get('text', '')[:200]}" for r in results
+        )
+
+    register_tool("memory.search", _memory_search)
+    register_tool("memory.federated", _memory_federated)
+
+
+def _register_clawflow_tools() -> None:
+    """Register flow dispatch tool action (Skill 5)."""
+    try:
+        from .orchestrator.clawflows import FlowEngine
+    except ImportError:
+        return
+
+    engine = FlowEngine()
+
+    async def _flow_run(args: dict) -> str:
+        name = args.get("flow", args.get("name", ""))
+        if not name:
+            return "[flow: name required]"
+        result = await engine.run_flow(name, trigger_context=args)
+        return f"flow={name} status={result.status} steps={len(result.step_outputs)}"
+
+    register_tool("flow.run", _flow_run)
+
+
+def _register_graph_tools(memory: Any) -> None:
+    """Register graph.query and graph.related tool actions (Skill 9)."""
+
+    async def _graph_query(args: dict) -> str:
+        label = args.get("label", "")
+        depth = int(args.get("depth", 3))
+        if not label:
+            return "[graph.query: label required]"
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(None, memory.query_graph, label, depth)
+        if not results:
+            return f"[graph.query: no nodes reachable from '{label}']"
+        lines = [
+            f"depth={r['depth']} {r['label']} ({r['type']}) via {r['relation_type']} w={r['weight']:.1f}"
+            for r in results
+        ]
+        return "\n".join(lines)
+
+    async def _graph_related(args: dict) -> str:
+        label = args.get("label", "")
+        max_hops = int(args.get("max_hops", 2))
+        if not label:
+            return "[graph.related: label required]"
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(None, memory.related_concepts, label, max_hops)
+        if not results:
+            return f"[graph.related: no neighbours found for '{label}']"
+        lines = [
+            f"{r['label']} ({r['type']}) w={r['weight']:.1f} depth={r['depth']}"
+            for r in results
+        ]
+        return "\n".join(lines)
+
+    register_tool("graph.query", _graph_query)
+    register_tool("graph.related", _graph_related)
+
+
 async def _dispatch_tool(call: ToolCall) -> str:
     handler = _TOOL_REGISTRY.get(call.name)
     if handler is None:
@@ -106,6 +263,25 @@ async def _aappend(path: Path, record: dict) -> None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def _check_for_correction(
+    user_message: str,
+    prior_output: str,
+    session_id: str,
+    memory: Any,
+) -> None:
+    """
+    Post-response hook: detect corrections and store them (Skill 1).
+    Non-blocking fire-and-forget — errors are logged but never propagate.
+    """
+    try:
+        from .orchestrator.skill_improvement_cycle import classify_correction, store_correction
+        correction = classify_correction(user_message, prior_output)
+        if correction is not None:
+            store_correction(correction, session_id, memory)
+    except Exception as exc:
+        logger.debug("Correction check failed (non-fatal): %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +366,21 @@ class AgentLoop:
 
         # Safety guard
         self._safety = safety_guard or SafetyGuard(config={"safety_mode": getattr(config, "safety_mode", "strict")})
+
+        # Register web-search tool actions (Skill 6)
+        _register_web_search_tools(vault=vault)
+
+        # Register Python executor tool action (Skill 7)
+        _register_python_executor_tools()
+
+        # Register memory fact tool actions (Skill 2)
+        _register_memory_tools(memory=memory)
+
+        # Register Clawflow tool action (Skill 5)
+        _register_clawflow_tools()
+
+        # Register Knowledge Graph tool actions (Skill 9)
+        _register_graph_tools(memory=memory)
 
     async def run(self, session_id: str, message: str, agent_id: str) -> tuple[str, str]:
         """
@@ -331,6 +522,14 @@ class AgentLoop:
             name="memory-store",
         )
         self._bg_tasks.add(_t)
+
+        # Fire-and-forget correction detection (Skill 1)
+        _correction_task = asyncio.create_task(
+            _check_for_correction(message, final_text, session_id, self._memory),
+            name="correction-check",
+        )
+        self._bg_tasks.add(_correction_task)
+
         return final_text, self._budget.format_footer()
 
     # ------------------------------------------------------------------
