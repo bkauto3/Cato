@@ -64,9 +64,12 @@ def register_tool(name: str, fn: Callable) -> None:
 
 
 def register_all_tools(register_tool_fn: Callable[[str, Any], None], config: Optional[Any] = None) -> None:
-    """Register Conduit-related and web search tools. Call with (loop.register_tool, self._cfg) from gateway."""
-    from cato.tools.web_search import register_web_search_tools
-    register_web_search_tools(register_tool_fn, config=config)
+    """Public API: register all available tools via a provided register_tool function."""
+    _register_web_search_tools()
+    _register_python_executor_tools()
+    _register_clawflow_tools()
+
+
 # ---------------------------------------------------------------------------
 # Web-Search-Plus tool registrations (Skill 6)
 # ---------------------------------------------------------------------------
@@ -371,9 +374,6 @@ class AgentLoop:
         # Safety guard
         self._safety = safety_guard or SafetyGuard(config={"safety_mode": getattr(config, "safety_mode", "strict")})
 
-    def register_tool(self, name: str, fn: Callable) -> None:
-        """Register a tool with the global registry (for use with register_all_tools(loop.register_tool, config))."""
-        register_tool(name, fn)
         # Register web-search tool actions (Skill 6)
         _register_web_search_tools(vault=vault)
 
@@ -388,6 +388,10 @@ class AgentLoop:
 
         # Register Knowledge Graph tool actions (Skill 9)
         _register_graph_tools(memory=memory)
+
+    def register_tool(self, name: str, fn: Callable) -> None:
+        """Register a tool with the global registry."""
+        register_tool(name, fn)
 
     async def run(self, session_id: str, message: str, agent_id: str) -> tuple[str, str]:
         """
