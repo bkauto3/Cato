@@ -2,30 +2,40 @@
 **Version:** 1.0.0
 **Capabilities:** shell.exec → claude CLI, codex CLI, gemini CLI
 
-## Overview
-Delegates coding tasks to the LLM CLIs installed on this machine:
-- `claude` (Claude Code) — at `/c/Users/Administrator/.local/bin/claude`
-- `codex` — OpenAI Codex CLI (`codex exec --full-auto`)
-- `gemini` — Google Gemini CLI (stdin-pipe only, never `--model` flag)
-
-All invocations run via the `shell` tool. Background execution is handled by
-running the command in a shell background process via `start /B` (Windows) or `&` (bash).
-
----
+## Trigger Phrases
+"write code", "build", "fix bug", "implement", "run codex", "run claude", "run gemini", "code review"
 
 ## Agent Selection
 
-| Task | CLI | Flags | Notes |
-|------|-----|-------|-------|
-| Code generation, feature builds | **codex** | `--full-auto` | Sandboxed auto-approves all writes |
-| Research, analysis, writing | **claude** | (none) | Non-interactive, reads/writes files |
-| Design systems, visual reasoning | **gemini** | stdin pipe only | `cat prompt.md \| gemini` |
-| PR review | **codex** | (none, vanilla) | No side effects |
-| Ad-hoc fixes | **codex** | `--full-auto` | Fastest for targeted code changes |
+| Task | CLI | Flags |
+|------|-----|-------|
+| Code generation / builds | **codex** | `--full-auto` |
+| Research / analysis / writing | **claude** | (none) |
+| Design systems / visual | **gemini** | stdin pipe only |
+| PR review | **codex** | (none) |
 
----
+## Quick Examples
 
-## Instructions
+```
+# Codex build
+shell.exec: codex exec --full-auto "Build X"  workdir: C:\project
+
+# Claude task
+shell.exec: claude "Your task"  workdir: C:\project
+
+# Gemini (stdin ONLY — never --model)
+shell.exec: cat prompt.md | gemini  workdir: C:\project
+```
+
+## Rules
+1. `--full-auto` required for Codex file writes
+2. `workdir` must point to target project, never ~/.cato/
+3. Gemini = stdin pipe only, no `--model` flag ever
+4. Monitor long tasks — redirect to log file, then tail
+
+<!-- COLD -->
+
+## Full Instructions
 
 ### Running Codex (building / fixing code)
 
@@ -104,7 +114,7 @@ shell.exec:
 
 ---
 
-## Rules
+## Extended Rules
 
 1. **Respect the CLI choice** — if user asks for Codex, use Codex. Never substitute.
 2. **workdir matters** — always scope to target project, never the Cato data dir.

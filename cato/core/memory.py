@@ -49,6 +49,28 @@ CREATE TABLE IF NOT EXISTS chunks (
     updated_at  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_source ON chunks(source_file);
+CREATE TABLE IF NOT EXISTS distilled_summaries (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id     TEXT NOT NULL,
+    turn_start     INTEGER NOT NULL,
+    turn_end       INTEGER NOT NULL,
+    summary        TEXT NOT NULL,
+    key_facts      TEXT NOT NULL,
+    decisions      TEXT NOT NULL,
+    open_questions TEXT NOT NULL,
+    confidence     REAL NOT NULL DEFAULT 0.75,
+    created_at     TEXT NOT NULL,
+    embedding      BLOB
+);
+CREATE INDEX IF NOT EXISTS idx_distill_session ON distilled_summaries(session_id);
+CREATE TABLE IF NOT EXISTS chunk_usage (
+    chunk_id      TEXT PRIMARY KEY,
+    chunk_text    TEXT NOT NULL,
+    use_count     INTEGER NOT NULL DEFAULT 0,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    avg_score     REAL NOT NULL DEFAULT 0.0,
+    last_used     REAL NOT NULL
+);
 """
 
 
@@ -423,6 +445,119 @@ class MemorySystem:
     def chunk_count(self) -> int:
         """Return total number of stored chunks."""
         return self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+
+    # ------------------------------------------------------------------
+    # Distillation support
+    # ------------------------------------------------------------------
+
+    def store_distillation(self, result: "DistillationResult") -> int:
+        """
+        Persist a :class:`DistillationResult` to the ``distilled_summaries`` table.
+
+        Returns the SQLite rowid of the inserted row.
+        """
+        # Import here to avoid circular dependency with distiller module
+        from .distiller import DistillationResult  # noqa: F401
+
+        key_facts_json = json.dumps(result.key_facts)
+        decisions_json = json.dumps(result.decisions)
+        open_questions_json = json.dumps(result.open_questions)
+
+        with self._write_lock:
+            cur = self._conn.execute(
+                """
+                INSERT INTO distilled_summaries
+                    (session_id, turn_start, turn_end, summary,
+                     key_facts, decisions, open_questions,
+                     confidence, created_at, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.session_id,
+                    result.turn_start,
+                    result.turn_end,
+                    result.summary,
+                    key_facts_json,
+                    decisions_json,
+                    open_questions_json,
+                    result.confidence,
+                    result.created_at,
+                    result.embedding,
+                ),
+            )
+            self._conn.commit()
+        return cur.lastrowid
+
+    def search_distilled(
+        self,
+        query: str,
+        session_id: str | None = None,
+        top_k: int = 3,
+    ) -> list[dict]:
+        """
+        Cosine similarity search over distilled summary embeddings.
+
+        Args:
+            query: Search query string.
+            session_id: If provided, restrict search to this session.
+            top_k: Maximum number of results to return.
+
+        Returns:
+            List of dicts with keys: id, session_id, turn_start, turn_end,
+            summary, key_facts, decisions, open_questions, confidence, score,
+            source_file.
+        """
+        if session_id:
+            rows = self._conn.execute(
+                "SELECT * FROM distilled_summaries WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM distilled_summaries"
+            ).fetchall()
+
+        if not rows:
+            return []
+
+        # Build query embedding
+        q_vec = self._get_embed_model().encode(
+            [query], normalize_embeddings=True, show_progress_bar=False
+        )[0].astype(np.float32)
+
+        scored: list[tuple[float, sqlite3.Row]] = []
+        for row in rows:
+            if row["embedding"] is None:
+                score = 0.0
+            else:
+                row_vec = self._bytes_to_vec(row["embedding"])
+                score = self._cosine(q_vec, row_vec)
+            scored.append((score, row))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = scored[:top_k]
+
+        results = []
+        for score, row in top:
+            sid = row["session_id"]
+            ts = row["turn_start"]
+            te = row["turn_end"]
+            results.append(
+                {
+                    "id": row["id"],
+                    "session_id": sid,
+                    "turn_start": ts,
+                    "turn_end": te,
+                    "summary": row["summary"],
+                    "key_facts": json.loads(row["key_facts"]),
+                    "decisions": json.loads(row["decisions"]),
+                    "open_questions": json.loads(row["open_questions"]),
+                    "confidence": row["confidence"],
+                    "score": score,
+                    "source_file": f"distill:{sid}:{ts}-{te}",
+                }
+            )
+        return results
 
     def close(self) -> None:
         """Close the SQLite connection."""

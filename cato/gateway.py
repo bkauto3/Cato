@@ -699,6 +699,16 @@ class Gateway:
         from .core.memory import MemorySystem
         from .tools import register_all_tools
         memory = MemorySystem(agent_id=self._cfg.agent_name)
+        # Index all workspace .md files (including MEMORY.md) into SQLite so
+        # that asearch() can retrieve them semantically each turn.  Idempotent:
+        # already-indexed files are skipped based on source_file path key.
+        workspace_dir = _CATO_DIR / self._cfg.agent_name / "workspace"
+        if workspace_dir.exists():
+            try:
+                n = memory.load_workspace_files(workspace_dir)
+                logger.info("Indexed %d new chunks from workspace at startup", n)
+            except Exception as exc:
+                logger.warning("workspace indexing failed (non-fatal): %s", exc)
         ctx    = ContextBuilder(max_tokens=self._cfg.context_budget_tokens)
         loop = AgentLoop(
             config=self._cfg, budget=self._budget, vault=self._vault,

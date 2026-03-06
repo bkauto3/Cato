@@ -1242,3 +1242,114 @@ def cmd_coding_agent(task: str, file: Optional[str], context: str, verbose: bool
     except Exception as e:
         safe_print(f"Error executing coding-agent: {e}")
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# cato metrics
+# ---------------------------------------------------------------------------
+
+@main.group("metrics")
+def metrics_cmd() -> None:
+    """View runtime metrics for the coding agent and token usage."""
+    pass
+
+
+@metrics_cmd.command("token-report")
+@click.option("--cost-in", "cost_in", default=3.0, show_default=True, type=float,
+              help="USD cost per 1M input tokens.")
+@click.option("--cost-out", "cost_out", default=15.0, show_default=True, type=float,
+              help="USD cost per 1M output tokens.")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Output raw JSON instead of formatted report.")
+def cmd_token_report(cost_in: float, cost_out: float, as_json: bool) -> None:
+    """Show session token usage, per-slot averages, and estimated cost.
+
+    \b
+    Example:
+        cato metrics token-report
+        cato metrics token-report --cost-in 3 --cost-out 15
+        cato metrics token-report --json
+    """
+    from cato.orchestrator.metrics import get_token_report
+
+    report = get_token_report(
+        cost_per_million_input=cost_in,
+        cost_per_million_output=cost_out,
+    )
+
+    if as_json:
+        safe_print(json.dumps(report, indent=2))
+        return
+
+    safe_print("\nCato Token Usage Report")
+    safe_print("=" * 50)
+    safe_print(f"  Total invocations:      {report['total_invocations']}")
+    safe_print(f"  Total input tokens:     {report['total_tokens_in']:,}")
+    safe_print(f"  Total output tokens:    {report['total_tokens_out']:,}")
+    safe_print(f"  Input/output ratio:     {report['ratio_in_to_out']:.2f}:1")
+    safe_print(f"  Avg input  (last 100):  {report['avg_tokens_in_last_100']:.1f} tokens")
+    safe_print(f"  Avg output (last 100):  {report['avg_tokens_out_last_100']:.1f} tokens")
+
+    per_slot = report.get("per_slot_averages", {})
+    if per_slot:
+        safe_print("\nPer-Slot Average Tokens")
+        safe_print("-" * 30)
+        for slot, avg in sorted(per_slot.items()):
+            safe_print(f"  {slot:<22} {avg:>8.1f}")
+
+    tier_dist = report.get("tier_distribution", {})
+    if tier_dist:
+        safe_print("\nQuery Tier Distribution")
+        safe_print("-" * 30)
+        total_inv = report["total_invocations"] or 1
+        for tier, count in sorted(tier_dist.items()):
+            pct = count / total_inv * 100
+            safe_print(f"  {tier:<22} {count:>5} ({pct:.1f}%)")
+
+    safe_print(f"\n  Estimated cost:  ${report['estimated_cost_usd']:.6f} USD")
+    safe_print(f"  (rates: ${cost_in:.2f}/M input, ${cost_out:.2f}/M output)\n")
+
+
+@metrics_cmd.command("ab-report")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Output raw JSON instead of formatted report.")
+def cmd_ab_report(as_json: bool) -> None:
+    """Show A/B context pool test statistics.
+
+    \b
+    Example:
+        cato metrics ab-report
+        cato metrics ab-report --json
+    """
+    from cato.core.context_pool import ContextPool
+    from cato.core.memory import MemorySystem
+
+    memory = MemorySystem(agent_id="default")
+    pool = ContextPool(memory)
+
+    stats = pool.get_ab_stats()
+    champion_chunks = pool.get_champion_chunks(top_k=100)
+    challenger_chunks = pool.get_challenger_chunks(top_k=100)
+
+    report = {
+        "total_ab_turns": stats["total_ab_turns"],
+        "consecutive_successes": stats["consecutive_successes"],
+        "consecutive_failures": stats["consecutive_failures"],
+        "total_promotions": stats["total_promotions"],
+        "champion_chunk_count": len(champion_chunks),
+        "challenger_chunk_count": len(challenger_chunks),
+    }
+
+    if as_json:
+        safe_print(json.dumps(report, indent=2))
+        return
+
+    safe_print("\nCato A/B Context Pool Report")
+    safe_print("=" * 50)
+    safe_print(f"  Total A/B turns:          {report['total_ab_turns']}")
+    safe_print(f"  Consecutive successes:     {report['consecutive_successes']}")
+    safe_print(f"  Consecutive failures:      {report['consecutive_failures']}")
+    safe_print(f"  Total promotions:          {report['total_promotions']}")
+    safe_print(f"  Champion chunk count:      {report['champion_chunk_count']}")
+    safe_print(f"  Challenger chunk count:    {report['challenger_chunk_count']}")
+    safe_print("")
