@@ -201,6 +201,12 @@ class Gateway:
         session_id = task["session_id"]
         channel    = task["channel"]
         agent_id   = task.get("agent_id", self._cfg.agent_name)
+
+        # Clawflows: if task has 'flow' key, route to FlowEngine (Skill 5)
+        if "flow" in task:
+            await self._process_flow_task(task)
+            return
+
         try:
             # Lazy-init: build agent loop on first message (avoids GIL block at startup)
             await self._ensure_agent_loop()
@@ -219,6 +225,26 @@ class Gateway:
         except Exception as exc:
             logger.error("session=%s processing error: %s", session_id, exc, exc_info=True)
             await self.send(session_id, f"[internal error: {exc}]", channel)
+
+    async def _process_flow_task(self, task: dict) -> None:
+        """Route a task dict with 'flow' key to FlowEngine (Skill 5 — Clawflows)."""
+        session_id = task.get("session_id", "flow-default")
+        channel    = task.get("channel", "web")
+        flow_name  = task["flow"]
+        try:
+            from .orchestrator.clawflows import FlowEngine
+            engine = FlowEngine()
+            result = await engine.run_flow(flow_name, trigger_context=task)
+            text = (
+                f"Flow '{flow_name}' {result.status}. "
+                f"Steps completed: {len(result.step_outputs)}."
+            )
+            if result.error:
+                text += f" Error: {result.error}"
+            await self.send(session_id, text, channel)
+        except Exception as exc:
+            logger.error("Flow task %s error: %s", flow_name, exc, exc_info=True)
+            await self.send(session_id, f"[flow error: {exc}]", channel)
 
     # ------------------------------------------------------------------
     # Lane management
@@ -700,6 +726,16 @@ class Gateway:
         from .tools import register_all_tools
         from .agent_loop import register_all_tools as register_conduit_web_tools
         memory = MemorySystem(agent_id=self._cfg.agent_name)
+        # Index all workspace .md files (including MEMORY.md) into SQLite so
+        # that asearch() can retrieve them semantically each turn.  Idempotent:
+        # already-indexed files are skipped based on source_file path key.
+        workspace_dir = _CATO_DIR / self._cfg.agent_name / "workspace"
+        if workspace_dir.exists():
+            try:
+                n = memory.load_workspace_files(workspace_dir)
+                logger.info("Indexed %d new chunks from workspace at startup", n)
+            except Exception as exc:
+                logger.warning("workspace indexing failed (non-fatal): %s", exc)
         ctx    = ContextBuilder(max_tokens=self._cfg.context_budget_tokens)
         loop = AgentLoop(
             config=self._cfg, budget=self._budget, vault=self._vault,

@@ -158,6 +158,16 @@ pre,code{font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:
 .pool-badge.subprocess{background:#1e293b;color:#94a3b8;border:1px solid #334155}
 .source-label{font-size:10px;color:var(--text-muted);font-style:italic}
 
+/* ── Token Status Bar ───────────────────────────────────────── */
+.token-bar{display:flex;align-items:center;gap:10px;padding:4px 18px;background:var(--bg-panel);border-top:1px solid var(--border);font-size:10px;color:var(--text-muted);flex-shrink:0;flex-wrap:wrap}
+.token-bar-item{display:flex;align-items:center;gap:3px}
+.token-bar-label{color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.token-bar-val{color:var(--text-sec);font-variant-numeric:tabular-nums}
+.token-bar-sep{color:var(--border);margin:0 2px}
+.token-tooltip{position:relative;cursor:help}
+.token-tooltip:hover .token-tooltip-body{display:block}
+.token-tooltip-body{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#1e2433;border:1px solid #374151;border-radius:7px;padding:8px 12px;white-space:nowrap;font-size:11px;color:var(--text);z-index:100;min-width:180px;line-height:1.8}
+
 /* ── Focus styles (accessibility) ──────────────────────────── */
 button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid #3b82f6;outline-offset:2px}
 
@@ -227,12 +237,13 @@ const HB_TIMEOUT         = 3000;
 const TASK_TIMEOUT_MS    = 5000;
 
 function useTalkPageStream(taskId, wsBase) {
-  const [messages,    setMessages]    = useState([]);
-  const [isLoading,   setIsLoading]   = useState(true);
-  const [synthesis,   setSynthesis]   = useState(null);
-  const [error,       setError]       = useState(null);
-  const [connStatus,  setConnStatus]  = useState("connecting");
-  const [poolStatus,  setPoolStatus]  = useState(null);
+  const [messages,       setMessages]       = useState([]);
+  const [isLoading,      setIsLoading]      = useState(true);
+  const [synthesis,      setSynthesis]      = useState(null);
+  const [error,          setError]          = useState(null);
+  const [connStatus,     setConnStatus]     = useState("connecting");
+  const [poolStatus,     setPoolStatus]     = useState(null);
+  const [tokenTelemetry, setTokenTelemetry] = useState(null);
   const endRef     = useRef(null);
   const wsRef      = useRef(null);
   const retriesRef = useRef(0);
@@ -294,6 +305,11 @@ function useTalkPageStream(taskId, wsBase) {
 
     if (event === "pool_status") {
       setPoolStatus(data.models || null);
+      return;
+    }
+
+    if (event === "token_telemetry") {
+      setTokenTelemetry(data);
       return;
     }
 
@@ -384,7 +400,7 @@ function useTalkPageStream(taskId, wsBase) {
     };
   }, [taskId]);
 
-  return { messages, isLoading, synthesis, error, connStatus, poolStatus, endRef };
+  return { messages, isLoading, synthesis, error, connStatus, poolStatus, tokenTelemetry, endRef };
 }
 
 // ── Confidence Badge ───────────────────────────────────────────────────── //
@@ -475,11 +491,71 @@ function MessageBubble({ message }) {
   );
 }
 
+// ── Token Status Bar ───────────────────────────────────────────────────── //
+
+function TokenStatusBar({ telemetry }) {
+  if (!telemetry) return null;
+  const fmt = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}k` : String(n);
+  const slots = telemetry.context_slots_used || {};
+  const hasSlots = Object.keys(slots).length > 0;
+  return (
+    <div className="token-bar" role="status" aria-label="Token usage" data-testid="token-status-bar">
+      <span className="token-bar-item">
+        <span className="token-bar-label">Turn In</span>
+        <span className="token-bar-val" data-testid="token-turn-in">{fmt(telemetry.turn_tokens_in || 0)}</span>
+      </span>
+      <span className="token-bar-sep">·</span>
+      <span className="token-bar-item">
+        <span className="token-bar-label">Out</span>
+        <span className="token-bar-val" data-testid="token-turn-out">{fmt(telemetry.turn_tokens_out || 0)}</span>
+      </span>
+      <span className="token-bar-sep">·</span>
+      <span className="token-bar-item">
+        <span className="token-bar-label">Session</span>
+        <span className="token-bar-val" data-testid="token-session-total">
+          {fmt(telemetry.session_total_in || 0)} / {fmt(telemetry.session_total_out || 0)}
+        </span>
+      </span>
+      {(telemetry.input_output_ratio > 0) && (
+        <>
+          <span className="token-bar-sep">·</span>
+          <span className="token-bar-item">
+            <span className="token-bar-label">Ratio</span>
+            <span className="token-bar-val" data-testid="token-ratio">{(telemetry.input_output_ratio).toFixed(1)}:1</span>
+          </span>
+        </>
+      )}
+      {hasSlots && (
+        <>
+          <span className="token-bar-sep">·</span>
+          <span className="token-tooltip token-bar-item" tabIndex={0} aria-label="Context slot breakdown">
+            <span className="token-bar-label" style={{textDecoration:"underline dotted",cursor:"help"}}>Slots</span>
+            <div className="token-tooltip-body" role="tooltip">
+              {Object.entries(slots).map(([k, v]) => (
+                <div key={k}><strong>{k}:</strong> {v} tokens</div>
+              ))}
+            </div>
+          </span>
+        </>
+      )}
+      {(telemetry.estimated_cost_usd > 0) && (
+        <>
+          <span className="token-bar-sep">·</span>
+          <span className="token-bar-item">
+            <span className="token-bar-label">Est.</span>
+            <span className="token-bar-val" data-testid="token-cost">${telemetry.estimated_cost_usd.toFixed(4)}</span>
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── TalkPage ───────────────────────────────────────────────────────────── //
 
 const MODELS = ["claude","codex","gemini"];
 
-function TalkPage({ task, messages, isLoading, synthesis, error, connStatus, poolStatus, endRef }) {
+function TalkPage({ task, messages, isLoading, synthesis, error, connStatus, poolStatus, tokenTelemetry, endRef }) {
   const msgsAreaRef  = useRef(null);
   const userScrolled = useRef(false);
 
@@ -573,6 +649,8 @@ function TalkPage({ task, messages, isLoading, synthesis, error, connStatus, poo
           </div>
         ) : null}
       </div>
+
+      <TokenStatusBar telemetry={tokenTelemetry} />
     </section>
   );
 }
@@ -785,7 +863,7 @@ function RightSidebar({ synthesis, isLoading, taskId }) {
 // ── Coding Agent Page ──────────────────────────────────────────────────── //
 
 function CodingAgentPage({ taskId, initialTask="" }) {
-  const { messages, isLoading, synthesis, error, connStatus, poolStatus, endRef } =
+  const { messages, isLoading, synthesis, error, connStatus, poolStatus, tokenTelemetry, endRef } =
     useTalkPageStream(taskId);
   const [taskDesc, setTaskDesc] = useState(initialTask);
   const [recentTasks, setRecentTasks] = useLocalStorage("cato-recent-tasks", []);
@@ -854,7 +932,8 @@ function CodingAgentPage({ taskId, initialTask="" }) {
         )}
         <TalkPage task={taskDesc||`Task ${taskId}`} messages={messages}
                   isLoading={isLoading} synthesis={synthesis} error={error}
-                  connStatus={connStatus} poolStatus={poolStatus} endRef={endRef}/>
+                  connStatus={connStatus} poolStatus={poolStatus}
+                  tokenTelemetry={tokenTelemetry} endRef={endRef}/>
       </div>
 
       {/* Right sidebar */}

@@ -15,6 +15,7 @@ import logging
 import re
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -49,7 +50,112 @@ CREATE TABLE IF NOT EXISTS chunks (
     updated_at  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_source ON chunks(source_file);
+CREATE TABLE IF NOT EXISTS distilled_summaries (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id     TEXT NOT NULL,
+    turn_start     INTEGER NOT NULL,
+    turn_end       INTEGER NOT NULL,
+    summary        TEXT NOT NULL,
+    key_facts      TEXT NOT NULL,
+    decisions      TEXT NOT NULL,
+    open_questions TEXT NOT NULL,
+    confidence     REAL NOT NULL DEFAULT 0.75,
+    created_at     TEXT NOT NULL,
+    embedding      BLOB
+);
+CREATE INDEX IF NOT EXISTS idx_distill_session ON distilled_summaries(session_id);
+CREATE TABLE IF NOT EXISTS chunk_usage (
+    chunk_id      TEXT PRIMARY KEY,
+    chunk_text    TEXT NOT NULL,
+    use_count     INTEGER NOT NULL DEFAULT 0,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    avg_score     REAL NOT NULL DEFAULT 0.0,
+    last_used     REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS facts (
+    key              TEXT PRIMARY KEY,
+    value            TEXT NOT NULL,
+    confidence       REAL DEFAULT 1.0,
+    source_session   TEXT,
+    last_reinforced  REAL,
+    decay_factor     REAL DEFAULT 0.95,
+    created_at       REAL
+);
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    INTEGER PRIMARY KEY,
+    applied_at REAL
+);
+CREATE TABLE IF NOT EXISTS kg_nodes (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    type           TEXT NOT NULL,
+    label          TEXT NOT NULL UNIQUE,
+    embedding      BLOB,
+    source_session TEXT,
+    created_at     REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_label ON kg_nodes(label);
+CREATE TABLE IF NOT EXISTS kg_edges (
+    from_id       INTEGER NOT NULL REFERENCES kg_nodes(id),
+    to_id         INTEGER NOT NULL REFERENCES kg_nodes(id),
+    relation_type TEXT NOT NULL,
+    weight        REAL NOT NULL DEFAULT 1.0,
+    source_session TEXT,
+    created_at    REAL NOT NULL,
+    PRIMARY KEY (from_id, to_id, relation_type)
+);
+CREATE TABLE IF NOT EXISTS corrections (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_type        TEXT NOT NULL,
+    wrong_approach   TEXT NOT NULL,
+    correct_approach TEXT NOT NULL,
+    context_hash     TEXT NOT NULL,
+    session_id       TEXT NOT NULL,
+    timestamp        REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_corrections_hash ON corrections(context_hash);
+CREATE TABLE IF NOT EXISTS skill_versions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    skill_name   TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    timestamp    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_versions_name ON skill_versions(skill_name);
 """
+
+_FACTS_MIGRATION_VERSION = 1
+
+
+def _apply_facts_migration(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: add any missing columns to the facts table."""
+    # Run CREATE TABLE IF NOT EXISTS for facts + migrations (already in schema)
+    # Now add columns that may be missing in pre-existing DBs
+    columns_to_add = [
+        ("confidence",      "REAL DEFAULT 1.0"),
+        ("source_session",  "TEXT"),
+        ("last_reinforced", "REAL"),
+        ("decay_factor",    "REAL DEFAULT 0.95"),
+        ("created_at",      "REAL"),
+    ]
+    for col_name, col_def in columns_to_add:
+        try:
+            conn.execute(f"ALTER TABLE facts ADD COLUMN {col_name} {col_def}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            # Column already exists — idempotent
+            pass
+
+    # Track migration
+    already = conn.execute(
+        "SELECT 1 FROM schema_migrations WHERE version = ?",
+        (_FACTS_MIGRATION_VERSION,),
+    ).fetchone()
+    if not already:
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (_FACTS_MIGRATION_VERSION, time.time()),
+        )
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +216,16 @@ class MemorySystem:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
         conn.commit()
+        _apply_facts_migration(conn)
+        # Hard dependency check: facts table must exist (required by Knowledge Graph)
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='facts'"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                "MemorySystem requires the 'facts' table (Skill 2 / Mem0). "
+                "Ensure the schema has been applied correctly before using this class."
+            )
         return conn
 
     def _now_iso(self) -> str:
@@ -423,6 +539,418 @@ class MemorySystem:
     def chunk_count(self) -> int:
         """Return total number of stored chunks."""
         return self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+
+    # ------------------------------------------------------------------
+    # Distillation support
+    # ------------------------------------------------------------------
+
+    def store_distillation(self, result: "DistillationResult") -> int:
+        """
+        Persist a :class:`DistillationResult` to the ``distilled_summaries`` table.
+
+        Returns the SQLite rowid of the inserted row.
+        """
+        # Import here to avoid circular dependency with distiller module
+        from .distiller import DistillationResult  # noqa: F401
+
+        key_facts_json = json.dumps(result.key_facts)
+        decisions_json = json.dumps(result.decisions)
+        open_questions_json = json.dumps(result.open_questions)
+
+        with self._write_lock:
+            cur = self._conn.execute(
+                """
+                INSERT INTO distilled_summaries
+                    (session_id, turn_start, turn_end, summary,
+                     key_facts, decisions, open_questions,
+                     confidence, created_at, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.session_id,
+                    result.turn_start,
+                    result.turn_end,
+                    result.summary,
+                    key_facts_json,
+                    decisions_json,
+                    open_questions_json,
+                    result.confidence,
+                    result.created_at,
+                    result.embedding,
+                ),
+            )
+            self._conn.commit()
+        return cur.lastrowid
+
+    def search_distilled(
+        self,
+        query: str,
+        session_id: str | None = None,
+        top_k: int = 3,
+    ) -> list[dict]:
+        """
+        Cosine similarity search over distilled summary embeddings.
+
+        Args:
+            query: Search query string.
+            session_id: If provided, restrict search to this session.
+            top_k: Maximum number of results to return.
+
+        Returns:
+            List of dicts with keys: id, session_id, turn_start, turn_end,
+            summary, key_facts, decisions, open_questions, confidence, score,
+            source_file.
+        """
+        if session_id:
+            rows = self._conn.execute(
+                "SELECT * FROM distilled_summaries WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM distilled_summaries"
+            ).fetchall()
+
+        if not rows:
+            return []
+
+        # Build query embedding
+        q_vec = self._get_embed_model().encode(
+            [query], normalize_embeddings=True, show_progress_bar=False
+        )[0].astype(np.float32)
+
+        scored: list[tuple[float, sqlite3.Row]] = []
+        for row in rows:
+            if row["embedding"] is None:
+                score = 0.0
+            else:
+                row_vec = self._bytes_to_vec(row["embedding"])
+                score = self._cosine(q_vec, row_vec)
+            scored.append((score, row))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = scored[:top_k]
+
+        results = []
+        for score, row in top:
+            sid = row["session_id"]
+            ts = row["turn_start"]
+            te = row["turn_end"]
+            results.append(
+                {
+                    "id": row["id"],
+                    "session_id": sid,
+                    "turn_start": ts,
+                    "turn_end": te,
+                    "summary": row["summary"],
+                    "key_facts": json.loads(row["key_facts"]),
+                    "decisions": json.loads(row["decisions"]),
+                    "open_questions": json.loads(row["open_questions"]),
+                    "confidence": row["confidence"],
+                    "score": score,
+                    "source_file": f"distill:{sid}:{ts}-{te}",
+                }
+            )
+        return results
+
+    # Mem0: Fact store
+    # ------------------------------------------------------------------
+
+    def store_fact(
+        self,
+        key: str,
+        value: str,
+        confidence: float = 1.0,
+        source_session: Optional[str] = None,
+    ) -> None:
+        """
+        UPSERT a fact.
+
+        If *key* already exists: reinforce confidence (min 1.0) and update
+        last_reinforced timestamp.
+        If *key* is new: insert with given confidence.
+        """
+        now = time.time()
+        with self._write_lock:
+            existing = self._conn.execute(
+                "SELECT confidence FROM facts WHERE key = ?", (key,)
+            ).fetchone()
+            if existing is not None:
+                new_conf = min(1.0, existing["confidence"] + 0.1)
+                self._conn.execute(
+                    "UPDATE facts SET value = ?, confidence = ?, last_reinforced = ?, source_session = ? WHERE key = ?",
+                    (value, new_conf, now, source_session, key),
+                )
+            else:
+                self._conn.execute(
+                    "INSERT INTO facts (key, value, confidence, source_session, last_reinforced, decay_factor, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, 0.95, ?)",
+                    (key, value, confidence, source_session, now, now),
+                )
+            self._conn.commit()
+
+    def load_top_facts(self, n: int = 50) -> list[dict]:
+        """Return top *n* facts ordered by recency then confidence."""
+        rows = self._conn.execute(
+            "SELECT key, value, confidence, source_session, last_reinforced, decay_factor, created_at"
+            " FROM facts ORDER BY last_reinforced DESC, confidence DESC LIMIT ?",
+            (n,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def apply_decay(self, sessions_since_reinforced: int) -> int:
+        """
+        Decay confidence for facts that haven't been reinforced recently.
+
+        Facts whose last_reinforced timestamp is older than
+        *sessions_since_reinforced* seconds ago are multiplied by decay_factor.
+        Returns number of rows updated.
+        """
+        threshold = time.time() - sessions_since_reinforced
+        with self._write_lock:
+            cur = self._conn.execute(
+                "UPDATE facts SET confidence = confidence * decay_factor"
+                " WHERE last_reinforced < ?",
+                (threshold,),
+            )
+            self._conn.commit()
+        return cur.rowcount
+
+    def forget_fact(self, key: str) -> bool:
+        """Delete a fact by key. Returns True if found and deleted, False otherwise."""
+        with self._write_lock:
+            cur = self._conn.execute("DELETE FROM facts WHERE key = ?", (key,))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def forget_all_facts(self) -> int:
+        """Delete all facts. Returns count of deleted rows."""
+        with self._write_lock:
+            cur = self._conn.execute("DELETE FROM facts")
+            self._conn.commit()
+        return cur.rowcount
+
+    def fact_count(self) -> int:
+        """Return total number of stored facts."""
+        return self._conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+
+    # ------------------------------------------------------------------
+    # Knowledge Graph (Skill 9 — Cognee)
+    # ------------------------------------------------------------------
+
+    def add_node(
+        self,
+        type: str,
+        label: str,
+        embedding: Optional[bytes] = None,
+        source_session: Optional[str] = None,
+    ) -> int:
+        """
+        INSERT OR IGNORE a knowledge graph node (deduplicates by label).
+
+        Returns the node id.
+        """
+        now = time.time()
+        with self._write_lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO kg_nodes (type, label, embedding, source_session, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (type, label, embedding, source_session, now),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT id FROM kg_nodes WHERE label = ?", (label,)
+            ).fetchone()
+        return int(row["id"])
+
+    def seed_nodes_from_facts(self, session_id: Optional[str] = None) -> int:
+        """
+        Read facts table and create kg_nodes for each unique key.
+
+        Returns count of nodes created.
+        """
+        rows = self._conn.execute("SELECT key FROM facts").fetchall()
+        count = 0
+        for row in rows:
+            label = str(row["key"])
+            now = time.time()
+            with self._write_lock:
+                cur = self._conn.execute(
+                    "INSERT OR IGNORE INTO kg_nodes (type, label, embedding, source_session, created_at)"
+                    " VALUES (?, ?, NULL, ?, ?)",
+                    ("concept", label, session_id, now),
+                )
+                self._conn.commit()
+            if cur.rowcount > 0:
+                count += 1
+        return count
+
+    def extract_and_add_nodes(
+        self,
+        text: str,
+        session_id: Optional[str] = None,
+    ) -> list[int]:
+        """
+        Heuristic entity extraction from *text*.
+
+        Detected patterns:
+        - File paths  (.py, .ts, .json, .yaml, .yml, .toml, .md, .js, .tsx, .go, .rs)
+        - @mentions
+        - CamelCase words >= 8 chars
+        - ALL_CAPS words >= 4 chars
+
+        Returns list of node ids.
+        """
+        ids: list[int] = []
+        seen: set[str] = set()
+
+        # File paths
+        file_re = re.compile(
+            r"\b[\w./\\-]+\.(?:py|ts|tsx|js|json|yaml|yml|toml|md|go|rs|sh|txt|csv)\b"
+        )
+        for m in file_re.finditer(text):
+            label = m.group(0)
+            if label not in seen:
+                seen.add(label)
+                ids.append(self.add_node("file", label, source_session=session_id))
+
+        # @mentions
+        mention_re = re.compile(r"@([A-Za-z0-9_]+)")
+        for m in mention_re.finditer(text):
+            label = m.group(1)
+            if label not in seen:
+                seen.add(label)
+                ids.append(self.add_node("person", label, source_session=session_id))
+
+        # CamelCase words >= 8 chars
+        camel_re = re.compile(r"\b([A-Z][a-z]+(?:[A-Z][a-z]*)+)\b")
+        for m in camel_re.finditer(text):
+            label = m.group(1)
+            if len(label) >= 8 and label not in seen:
+                seen.add(label)
+                ids.append(self.add_node("concept", label, source_session=session_id))
+
+        # ALL_CAPS words >= 4 chars (not already matched as file path)
+        caps_re = re.compile(r"\b([A-Z_]{4,})\b")
+        for m in caps_re.finditer(text):
+            label = m.group(1)
+            if label not in seen and not label.startswith("_") and not label.endswith("_"):
+                seen.add(label)
+                ids.append(self.add_node("concept", label, source_session=session_id))
+
+        return ids
+
+    def add_edge(
+        self,
+        from_label: str,
+        to_label: str,
+        relation_type: str = "co_mentioned",
+        weight: float = 1.0,
+        source_session: Optional[str] = None,
+    ) -> bool:
+        """
+        Add (or reinforce) a directed edge between two nodes.
+
+        Auto-creates nodes with type "concept" if they do not exist.
+        On conflict, weight is reinforced: weight = weight + 1.0.
+        Returns True if an edge was inserted or updated.
+        """
+        from_id = self.add_node("concept", from_label, source_session=source_session)
+        to_id = self.add_node("concept", to_label, source_session=source_session)
+        now = time.time()
+        with self._write_lock:
+            existing = self._conn.execute(
+                "SELECT weight FROM kg_edges WHERE from_id=? AND to_id=? AND relation_type=?",
+                (from_id, to_id, relation_type),
+            ).fetchone()
+            if existing is not None:
+                new_weight = existing["weight"] + 1.0
+                self._conn.execute(
+                    "UPDATE kg_edges SET weight=? WHERE from_id=? AND to_id=? AND relation_type=?",
+                    (new_weight, from_id, to_id, relation_type),
+                )
+            else:
+                self._conn.execute(
+                    "INSERT INTO kg_edges (from_id, to_id, relation_type, weight, source_session, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (from_id, to_id, relation_type, weight, source_session, now),
+                )
+            self._conn.commit()
+        return True
+
+    def extract_and_add_edges(
+        self,
+        text: str,
+        session_id: Optional[str] = None,
+    ) -> None:
+        """
+        Detect co-occurring entity pairs in the same sentence and create/reinforce
+        co_mentioned edges between them.
+        """
+        # Split into sentences
+        sentences = re.split(r"[.!?]\s+|\n", text)
+        entity_re = re.compile(
+            r"(?:"
+            r"[\w./\\-]+\.(?:py|ts|tsx|js|json|yaml|yml|toml|md|go|rs|sh|txt|csv)"
+            r"|@[A-Za-z0-9_]+"
+            r"|[A-Z][a-z]+(?:[A-Z][a-z]*)+"
+            r"|[A-Z_]{4,}"
+            r")"
+        )
+        for sentence in sentences:
+            entities = [m.group(0).lstrip("@") for m in entity_re.finditer(sentence)]
+            # Deduplicate while preserving order
+            seen: list[str] = []
+            for e in entities:
+                if e not in seen:
+                    seen.append(e)
+            entities = seen
+            for i in range(len(entities)):
+                for j in range(i + 1, len(entities)):
+                    self.add_edge(
+                        entities[i], entities[j],
+                        relation_type="co_mentioned",
+                        source_session=session_id,
+                    )
+
+    def query_graph(self, start_label: str, depth: int = 3) -> list[dict]:
+        """
+        Multi-hop graph traversal from *start_label* up to *depth* hops.
+
+        Returns list of dicts with keys: label, type, relation_type, weight, depth.
+        Uses a recursive CTE for efficiency.
+        """
+        sql = """
+WITH RECURSIVE graph(from_id, to_id, relation_type, weight, depth) AS (
+    SELECT e.from_id, e.to_id, e.relation_type, e.weight, 1
+    FROM kg_edges e
+    JOIN kg_nodes n ON n.id = e.from_id
+    WHERE n.label = ?
+    UNION ALL
+    SELECT e.from_id, e.to_id, e.relation_type, e.weight, g.depth + 1
+    FROM kg_edges e
+    JOIN graph g ON g.to_id = e.from_id
+    WHERE g.depth < ?
+)
+SELECT DISTINCT n.label, n.type, g.relation_type, g.weight, g.depth
+FROM graph g JOIN kg_nodes n ON n.id = g.to_id
+ORDER BY g.depth, g.weight DESC
+"""
+        rows = self._conn.execute(sql, (start_label, depth)).fetchall()
+        return [dict(r) for r in rows]
+
+    def related_concepts(self, label: str, max_hops: int = 2) -> list[dict]:
+        """
+        Return nodes within *max_hops* of *label*, ranked by edge weight descending.
+        """
+        results = self.query_graph(label, depth=max_hops)
+        # Sort by weight desc, then depth asc
+        results.sort(key=lambda r: (-r["weight"], r["depth"]))
+        return results
+
+    # ------------------------------------------------------------------
+    # Close
+    # ------------------------------------------------------------------
 
     def close(self) -> None:
         """Close the SQLite connection."""
