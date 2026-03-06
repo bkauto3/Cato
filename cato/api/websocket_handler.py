@@ -37,13 +37,13 @@ try:
     )
 except ImportError:  # pragma: no cover — running without orchestrator installed
     async def invoke_claude_api(prompt: str, task: str) -> dict:  # type: ignore[misc]
-        return {"model": "claude", "response": "Claude unavailable.", "confidence": 0.75, "latency_ms": 0}
+        return {"model": "claude", "response": "Claude unavailable.", "confidence": 0.75, "latency_ms": 0, "source": "mock"}
 
     async def invoke_codex_cli(prompt: str, task: str) -> dict:  # type: ignore[misc]
-        return {"model": "codex", "response": "Codex unavailable.", "confidence": 0.72, "latency_ms": 0}
+        return {"model": "codex", "response": "Codex unavailable.", "confidence": 0.72, "latency_ms": 0, "source": "mock"}
 
     async def invoke_gemini_cli(prompt: str, task: str) -> dict:  # type: ignore[misc]
-        return {"model": "gemini", "response": "Gemini unavailable.", "confidence": 0.68, "latency_ms": 0}
+        return {"model": "gemini", "response": "Gemini unavailable.", "confidence": 0.68, "latency_ms": 0, "source": "mock"}
 
 logger = logging.getLogger(__name__)
 

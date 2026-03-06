@@ -165,6 +165,8 @@ async def invoke_claude_api(prompt: str, task: str) -> Dict:
             "source": "mock",
         }
     except SubprocessError as e:
+        # Note: SubprocessError only comes from _run_subprocess_async (cold path).
+        # Pool errors surface as RuntimeError and fall through to the generic handler.
         latency_ms = (time.time() - start_time) * 1000
         logger.error("claude CLI failed (rc=%d): %s", e.returncode, e.stderr[:200])
         return {
@@ -252,6 +254,8 @@ async def invoke_codex_cli(prompt: str, task: str) -> Dict:
             "source": "mock",
         }
     except SubprocessError as e:
+        # Note: SubprocessError only comes from _run_subprocess_async (cold path).
+        # Pool errors surface as RuntimeError and fall through to the generic handler.
         latency_ms = (time.time() - start_time) * 1000
         logger.error("codex CLI failed (rc=%d): %s", e.returncode, e.stderr[:200])
         return {

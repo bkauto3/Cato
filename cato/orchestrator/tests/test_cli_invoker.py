@@ -145,6 +145,7 @@ async def test_invoke_claude_api_uses_pool_when_warm():
     assert result["model"] == "claude"
     assert "pool response" in result["response"]
     assert result["degraded"] is False
+    assert result["source"] == "pool"
 
 
 @pytest.mark.asyncio
@@ -163,6 +164,7 @@ async def test_invoke_claude_api_falls_back_to_subprocess_when_pool_cold():
 
     mock_pool.send_to.assert_not_called()
     assert "subprocess response" in result["response"]
+    assert result["source"] == "subprocess"
 
 
 @pytest.mark.asyncio
@@ -179,6 +181,7 @@ async def test_invoke_claude_cli_not_installed():
     assert "[Claude Mock]" in result["response"]
     assert result["degraded"] is True
     assert result["latency_ms"] >= 0
+    assert result["source"] == "mock"
 
 
 @pytest.mark.asyncio
@@ -251,6 +254,7 @@ async def test_invoke_codex_cli_uses_pool_when_warm():
     assert result["model"] == "codex"
     assert "codex pool answer" in result["response"]
     assert result["degraded"] is False
+    assert result["source"] == "pool"
 
 
 @pytest.mark.asyncio
@@ -269,6 +273,7 @@ async def test_invoke_codex_cli_falls_back_to_subprocess_when_cold():
 
     mock_pool.send_to.assert_not_called()
     assert "codex subprocess result" in result["response"]
+    assert result["source"] == "subprocess"
 
 
 @pytest.mark.asyncio
@@ -285,6 +290,7 @@ async def test_invoke_codex_cli_not_installed():
     assert "[Codex Mock]" in result["response"]
     assert result["degraded"] is True
     assert result["latency_ms"] >= 0
+    assert result["source"] == "mock"
 
 
 @pytest.mark.asyncio
@@ -350,6 +356,7 @@ async def test_invoke_gemini_cli_success():
 
     assert result["model"] == "gemini"
     assert result["degraded"] is False
+    assert result["source"] == "subprocess"
 
 
 @pytest.mark.asyncio
@@ -365,6 +372,7 @@ async def test_invoke_gemini_cli_not_installed():
     assert result["confidence"] == 0.68
     assert "[Gemini Mock]" in result["response"]
     assert result["latency_ms"] >= 0
+    assert result["source"] == "mock"
 
 
 @pytest.mark.asyncio
