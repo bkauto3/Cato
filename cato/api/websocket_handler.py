@@ -43,6 +43,7 @@ try:
         invoke_claude_api,
         invoke_codex_cli,
         invoke_gemini_cli,
+        invoke_cursor_cli,
     )
 except ImportError:  # pragma: no cover — running without orchestrator installed
     async def invoke_claude_api(prompt: str, task: str) -> dict:  # type: ignore[misc]
@@ -53,6 +54,9 @@ except ImportError:  # pragma: no cover — running without orchestrator install
 
     async def invoke_gemini_cli(prompt: str, task: str) -> dict:  # type: ignore[misc]
         return {"model": "gemini", "response": "Gemini unavailable.", "confidence": 0.68, "latency_ms": 0, "source": "mock"}
+
+    async def invoke_cursor_cli(prompt: str, task: str) -> dict:  # type: ignore[misc]
+        return {"model": "cursor", "response": "Cursor unavailable.", "confidence": 0.70, "latency_ms": 0, "source": "mock"}
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +99,7 @@ async def _run_model_and_stream(
             "claude": invoke_claude_api,
             "codex":  invoke_codex_cli,
             "gemini": invoke_gemini_cli,
+            "cursor": invoke_cursor_cli,
         }
         invoker = invokers.get(model)
         if invoker is None:
@@ -201,12 +206,18 @@ async def coding_agent_ws_handler(request: web.Request) -> web.WebSocketResponse
 
     task_text = task_info.get("task", "")
     prompt    = task_info.get("prompt", task_text)
+    # Enabled models come from the task payload (set at invoke time from config)
+    enabled_models: list[str] = task_info.get(
+        "enabled_models", ["claude", "codex", "gemini"]
+    )
+    if not enabled_models:
+        enabled_models = ["claude", "codex", "gemini"]
 
     # Send initial status
     await ws.send_str(_serialize_event("status", {
         "task_id":  task_id,
         "message":  "Starting model invocations...",
-        "models":   ["claude", "codex", "gemini"],
+        "models":   enabled_models,
         "timestamp": int(time.time() * 1000),
     }))
 
@@ -218,9 +229,10 @@ async def coding_agent_ws_handler(request: web.Request) -> web.WebSocketResponse
             "claude": "warm" if pool.is_warm("claude") else "cold",
             "codex":  "warm" if pool.is_warm("codex") else "cold",
             "gemini": "subprocess",  # no daemon mode
+            "cursor": "subprocess",  # no daemon mode
         }
     except Exception:
-        pool_info = {"claude": "cold", "codex": "cold", "gemini": "subprocess"}
+        pool_info = {"claude": "cold", "codex": "cold", "gemini": "subprocess", "cursor": "subprocess"}
 
     await ws.send_str(_serialize_event("pool_status", {
         "models": pool_info,
@@ -231,7 +243,7 @@ async def coding_agent_ws_handler(request: web.Request) -> web.WebSocketResponse
     # Run heartbeat + model invocations concurrently                      #
     # ------------------------------------------------------------------ #
 
-    results: list[Optional[Dict[str, Any]]] = [None, None, None]
+    results: list[Optional[Dict[str, Any]]] = [None] * len(enabled_models)
     done_event = asyncio.Event()
 
     async def heartbeat_loop() -> None:
@@ -252,11 +264,10 @@ async def coding_agent_ws_handler(request: web.Request) -> web.WebSocketResponse
                 pass
 
     async def run_models() -> None:
-        """Run all models in parallel; set done_event when complete."""
+        """Run enabled models in parallel; set done_event when complete."""
         tasks = [
-            asyncio.create_task(_run_model_and_stream(ws, "claude", task_text, prompt)),
-            asyncio.create_task(_run_model_and_stream(ws, "codex",  task_text, prompt)),
-            asyncio.create_task(_run_model_and_stream(ws, "gemini", task_text, prompt)),
+            asyncio.create_task(_run_model_and_stream(ws, m, task_text, prompt))
+            for m in enabled_models
         ]
         model_results = await asyncio.gather(*tasks, return_exceptions=True)
         for i, r in enumerate(model_results):
@@ -406,6 +417,15 @@ async def invoke_coding_agent(request: web.Request) -> web.Response:
     language = body.get("language", "")
     context  = body.get("context", "")
 
+    # Validate and sanitize enabled_models list
+    _all_models = {"claude", "codex", "gemini", "cursor"}
+    raw_models = body.get("enabled_models", ["claude", "codex", "gemini"])
+    if not isinstance(raw_models, list):
+        raw_models = ["claude", "codex", "gemini"]
+    enabled_models = [m for m in raw_models if isinstance(m, str) and m in _all_models]
+    if not enabled_models:
+        enabled_models = ["claude", "codex", "gemini"]
+
     task_id = str(uuid.uuid4())
 
     prompt_parts = [task_text]
@@ -415,12 +435,13 @@ async def invoke_coding_agent(request: web.Request) -> web.Response:
         prompt_parts.append(f"Code context:\n{context}")
 
     _task_store[task_id] = {
-        "task":      task_text,
-        "language":  language,
-        "context":   context,
-        "prompt":    "\n\n".join(prompt_parts),
-        "created_at": int(time.time() * 1000),
-        "status":    "queued",
+        "task":           task_text,
+        "language":       language,
+        "context":        context,
+        "prompt":         "\n\n".join(prompt_parts),
+        "created_at":     int(time.time() * 1000),
+        "status":         "queued",
+        "enabled_models": enabled_models,
     }
 
     logger.info("Created task %s: %r", task_id, task_text[:60])
@@ -452,9 +473,112 @@ async def get_task_info(request: web.Request) -> web.Response:
     })
 
 
+_ALL_MODELS = {"claude", "codex", "gemini", "cursor"}
+_SUBAGENT_BACKENDS = {"claude", "codex", "gemini", "cursor"}
+
+
+async def get_config(request: web.Request) -> web.Response:
+    """
+    GET /api/config
+
+    Returns the subagent-related config fields so the UI can render toggles.
+
+    Response::
+
+        {
+            "enabled_models": ["claude", "codex", "gemini"],
+            "subagent_enabled": false,
+            "subagent_coding_backend": "codex"
+        }
+    """
+    try:
+        from cato.config import CatoConfig
+        cfg = CatoConfig.load()
+        enabled_models = getattr(cfg, "enabled_models", ["claude", "codex", "gemini"])
+        if not isinstance(enabled_models, list):
+            enabled_models = ["claude", "codex", "gemini"]
+    except Exception:
+        enabled_models = ["claude", "codex", "gemini"]
+        cfg = None
+
+    return web.json_response({
+        "enabled_models":          enabled_models,
+        "subagent_enabled":        getattr(cfg, "subagent_enabled", False) if cfg else False,
+        "subagent_coding_backend": getattr(cfg, "subagent_coding_backend", "codex") if cfg else "codex",
+    })
+
+
+async def patch_config(request: web.Request) -> web.Response:
+    """
+    PATCH /api/config
+
+    Accepts a partial config update and persists it to ~/.cato/config.yaml.
+
+    Body (all fields optional)::
+
+        {
+            "enabled_models": ["claude", "gemini"],
+            "subagent_enabled": true,
+            "subagent_coding_backend": "cursor"
+        }
+
+    Response: the full updated config (same shape as GET /api/config).
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    try:
+        from cato.config import CatoConfig
+        cfg = CatoConfig.load()
+    except Exception as exc:
+        return web.json_response({"error": f"Config load failed: {exc}"}, status=500)
+
+    # enabled_models
+    if "enabled_models" in body:
+        raw = body["enabled_models"]
+        if not isinstance(raw, list):
+            return web.json_response({"error": "enabled_models must be a list"}, status=400)
+        validated = [m for m in raw if isinstance(m, str) and m in _ALL_MODELS]
+        if not validated:
+            return web.json_response({"error": "enabled_models must contain at least one valid model"}, status=400)
+        cfg.enabled_models = validated  # type: ignore[attr-defined]
+
+    # subagent_enabled
+    if "subagent_enabled" in body:
+        val = body["subagent_enabled"]
+        if not isinstance(val, bool):
+            return web.json_response({"error": "subagent_enabled must be a boolean"}, status=400)
+        cfg.subagent_enabled = val
+
+    # subagent_coding_backend
+    if "subagent_coding_backend" in body:
+        val = body["subagent_coding_backend"]
+        if val not in _SUBAGENT_BACKENDS:
+            return web.json_response(
+                {"error": f"subagent_coding_backend must be one of {sorted(_SUBAGENT_BACKENDS)}"},
+                status=400,
+            )
+        cfg.subagent_coding_backend = val
+
+    try:
+        cfg.save()
+    except Exception as exc:
+        return web.json_response({"error": f"Config save failed: {exc}"}, status=500)
+
+    return web.json_response({
+        "enabled_models":          getattr(cfg, "enabled_models", ["claude", "codex", "gemini"]),
+        "subagent_enabled":        cfg.subagent_enabled,
+        "subagent_coding_backend": cfg.subagent_coding_backend,
+    })
+
+
 def register_routes(app: web.Application) -> None:
     """Register coding agent routes onto an aiohttp Application."""
     app.router.add_post("/api/coding-agent/invoke",        invoke_coding_agent)
     app.router.add_get("/api/coding-agent/{task_id}",      get_task_info)
     app.router.add_get("/ws/coding-agent/{task_id}",       coding_agent_ws_handler)
+    app.router.add_get("/api/config",                      get_config)
+    app.router.add_patch("/api/config",                    patch_config)
     logger.info("Coding agent routes registered")

@@ -185,6 +185,50 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .entry-card{background:var(--bg-panel);border:1px solid var(--border);border-radius:12px;padding:28px 30px;width:100%;max-width:520px;margin:0 16px}
 .entry-title{font-size:20px;font-weight:700;color:var(--text);margin-bottom:4px}
 .entry-sub{font-size:13px;color:var(--text-muted);margin-bottom:20px}
+
+/* ── Model colour for cursor ─────────────────────────────────── */
+:root{--color-cursor:#22D3EE}
+.model-ind.cursor{color:var(--color-cursor);background:#22d3ee10;border-color:#22d3ee40}
+.msg-bubble.cursor::before{background:var(--color-cursor)}
+.model-btn.cursor{color:var(--color-cursor)}
+.model-ic.cursor{background:#22d3ee20;color:var(--color-cursor)}
+
+/* ── Model Settings Panel ────────────────────────────────────── */
+.model-settings-panel{background:var(--bg-panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.settings-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.settings-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted)}
+.settings-close{background:transparent;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;padding:2px 5px;border-radius:4px;line-height:1}
+.settings-close:hover{background:var(--bg-card);color:var(--text)}
+.settings-section-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:4px}
+.settings-model-list{display:flex;flex-direction:column;gap:6px}
+.settings-model-row{display:flex;align-items:center;justify-content:space-between;background:var(--bg-card);border:1px solid var(--border);border-radius:7px;padding:8px 10px;transition:border-color .15s}
+.settings-model-row.on{border-color:#334155}
+.settings-model-row.off{opacity:.55}
+.settings-model-info{display:flex;align-items:center;gap:8px}
+.settings-model-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.settings-model-name{display:block;font-size:12px;font-weight:600;color:var(--text);line-height:1.2}
+.settings-model-desc{display:block;font-size:10px;color:var(--text-muted);line-height:1.2}
+.settings-toggle{position:relative;width:32px;height:18px;border-radius:9px;border:none;cursor:pointer;transition:background .2s;flex-shrink:0;padding:0}
+.toggle-on{background:#3b82f6}
+.toggle-off{background:#374151}
+.toggle-knob{position:absolute;top:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .2s}
+.toggle-on .toggle-knob{left:16px}
+.toggle-off .toggle-knob{left:2px}
+.settings-subagent-row{display:flex;align-items:center}
+.settings-subagent-label{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-sec);cursor:pointer}
+.settings-subagent-label input[type=checkbox]{accent-color:#3b82f6}
+.settings-backend-select{display:flex;flex-direction:column;gap:4px}
+.settings-select{background:var(--bg-dark);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:12px;outline:none;cursor:pointer}
+.settings-select:focus{border-color:#3b82f6}
+.settings-footer{display:flex;align-items:center;gap:10px;margin-top:4px}
+.settings-save-btn{background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s,opacity .15s}
+.settings-save-btn:hover:not(:disabled){background:#2563eb}
+.settings-save-btn:disabled{opacity:.5;cursor:not-allowed}
+.settings-status{font-size:11px;font-weight:600}
+.settings-status.ok{color:#86efac}
+.settings-status.err{color:#fca5a5}
+.settings-gear-btn{background:transparent;border:none;color:var(--text-muted);font-size:14px;cursor:pointer;padding:4px 6px;border-radius:5px;line-height:1;transition:background .15s,color .15s}
+.settings-gear-btn:hover{background:var(--bg-card);color:var(--text)}
 </style>
 </head>
 <body>
@@ -423,8 +467,9 @@ function ConfidenceBadge({ confidence }) {
 
 // ── Message Bubble ─────────────────────────────────────────────────────── //
 
-const MODEL_LABELS = { claude:"Claude", codex:"Codex", gemini:"Gemini" };
-const MODEL_ICONS  = { claude:"C", codex:"X", gemini:"G" };
+const MODEL_LABELS = { claude:"Claude", codex:"Codex", gemini:"Gemini", cursor:"Cursor" };
+const MODEL_ICONS  = { claude:"C", codex:"X", gemini:"G", cursor:"⊕" };
+const MODEL_COLORS = { claude:"var(--color-claude)", codex:"var(--color-codex)", gemini:"var(--color-gemini)", cursor:"#22D3EE" };
 
 function MessageBubble({ message }) {
   const [expanded, setExpanded] = useState(false);
@@ -554,11 +599,12 @@ function TokenStatusBar({ telemetry }) {
 
 // ── TalkPage ───────────────────────────────────────────────────────────── //
 
-const MODELS = ["claude","codex","gemini"];
+const ALL_MODELS = ["claude","codex","gemini","cursor"];
 
-function TalkPage({ task, messages, isLoading, synthesis, error, connStatus, poolStatus, tokenTelemetry, endRef }) {
+function TalkPage({ task, messages, isLoading, synthesis, error, connStatus, poolStatus, tokenTelemetry, endRef, activeModels }) {
   const msgsAreaRef  = useRef(null);
   const userScrolled = useRef(false);
+  const models = activeModels || ALL_MODELS;
 
   const handleScroll = () => {
     const el = msgsAreaRef.current;
@@ -567,7 +613,7 @@ function TalkPage({ task, messages, isLoading, synthesis, error, connStatus, poo
   };
 
   const responded = (model) => messages.some(m => m.model.toLowerCase() === model);
-  const respCount  = MODELS.filter(m => responded(m)).length;
+  const respCount  = models.filter(m => responded(m)).length;
 
   return (
     <section className="talk-page" aria-label="Model conversation" data-testid="talk-page">
@@ -586,7 +632,7 @@ function TalkPage({ task, messages, isLoading, synthesis, error, connStatus, poo
         <div className="talk-header-task" title={task} data-testid="task-header">{task}</div>
         <div className="model-indicators" role="group" aria-label="Model status"
              data-testid="loading-spinners">
-          {MODELS.map(m => {
+          {models.map(m => {
             const loading = isLoading && !responded(m);
             const ps = poolStatus?.[m];
             return (
@@ -635,8 +681,8 @@ function TalkPage({ task, messages, isLoading, synthesis, error, connStatus, poo
           <div className="awaiting" role="status" aria-live="polite">
             <div className="dots" aria-hidden="true"><span/><span/><span/></div>
             {respCount > 0
-              ? `${respCount} response${respCount>1?"s":""} in… waiting for ${MODELS.length-respCount} more`
-              : `${MODELS.length} responses in progress...`}
+              ? `${respCount} response${respCount>1?"s":""} in… waiting for ${models.length-respCount} more`
+              : `${models.length} responses in progress...`}
           </div>
         ) : synthesis ? (
           <div className="synth-card" data-testid="synthesis-result">
@@ -653,6 +699,113 @@ function TalkPage({ task, messages, isLoading, synthesis, error, connStatus, poo
 
       <TokenStatusBar telemetry={tokenTelemetry} />
     </section>
+  );
+}
+
+// ── Model Config Hook ──────────────────────────────────────────────────── //
+
+function useModelConfig(apiBase) {
+  const [config, setConfig] = useState({ enabled_models: ["claude","codex","gemini"], subagent_enabled: false, subagent_coding_backend: "codex" });
+  useEffect(() => {
+    fetch(`${apiBase}/api/config`).then(r => r.json()).then(setConfig).catch(() => {});
+  }, [apiBase]);
+  return [config, setConfig];
+}
+
+// ── Model Settings Panel ───────────────────────────────────────────────── //
+
+function ModelSettingsPanel({ apiBase, config, setConfig, onClose }) {
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState("idle");
+
+  const toggleModel = (model) => {
+    setConfig(prev => {
+      const isOn = prev.enabled_models.includes(model);
+      if (isOn && prev.enabled_models.length === 1) return prev;
+      const next = isOn ? prev.enabled_models.filter(m => m !== model) : [...prev.enabled_models, model];
+      return { ...prev, enabled_models: next };
+    });
+  };
+
+  const save = async () => {
+    setSaving(true); setStatus("idle");
+    try {
+      const res = await fetch(`${apiBase}/api/config`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setStatus("saved");
+      setTimeout(() => setStatus("idle"), 2000);
+    } catch { setStatus("error"); }
+    finally { setSaving(false); }
+  };
+
+  const modelMeta = {
+    claude: { desc: "Anthropic · Claude Code CLI", color: "var(--color-claude)" },
+    codex:  { desc: "OpenAI · Codex CLI",           color: "var(--color-codex)"  },
+    gemini: { desc: "Google · Gemini CLI",           color: "var(--color-gemini)" },
+    cursor: { desc: "Cursor · Agent mode",           color: "#22D3EE"             },
+  };
+
+  return (
+    <div className="model-settings-panel">
+      <div className="settings-header">
+        <span className="settings-title">Model Toggles</span>
+        {onClose && <button className="settings-close" onClick={onClose} aria-label="Close">✕</button>}
+      </div>
+
+      <div className="settings-section-label">Active backends</div>
+      <div className="settings-model-list">
+        {ALL_MODELS.map(model => {
+          const meta = modelMeta[model];
+          const enabled = config.enabled_models.includes(model);
+          return (
+            <div key={model} className={`settings-model-row ${enabled ? "on" : "off"}`}>
+              <div className="settings-model-info">
+                <span className="settings-model-dot" style={{ background: meta.color }}/>
+                <div>
+                  <span className="settings-model-name">{MODEL_LABELS[model]}</span>
+                  <span className="settings-model-desc">{meta.desc}</span>
+                </div>
+              </div>
+              <button className={`settings-toggle ${enabled ? "toggle-on" : "toggle-off"}`}
+                      onClick={() => toggleModel(model)}
+                      aria-pressed={enabled}
+                      aria-label={`${enabled ? "Disable" : "Enable"} ${MODEL_LABELS[model]}`}>
+                <span className="toggle-knob"/>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="settings-section-label" style={{ marginTop: 16 }}>Subagent routing</div>
+      <div className="settings-subagent-row">
+        <label className="settings-subagent-label">
+          <input type="checkbox" checked={config.subagent_enabled}
+                 onChange={e => setConfig(p => ({ ...p, subagent_enabled: e.target.checked }))}/>
+          <span>Route coding tasks to a single backend</span>
+        </label>
+      </div>
+      {config.subagent_enabled && (
+        <div className="settings-backend-select">
+          <label className="settings-section-label">Backend</label>
+          <select className="settings-select" value={config.subagent_coding_backend}
+                  onChange={e => setConfig(p => ({ ...p, subagent_coding_backend: e.target.value }))}>
+            {ALL_MODELS.map(m => <option key={m} value={m}>{MODEL_LABELS[m]}</option>)}
+          </select>
+        </div>
+      )}
+
+      <div className="settings-footer">
+        <button className="settings-save-btn" onClick={save} disabled={saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+        {status === "saved" && <span className="settings-status ok">Saved</span>}
+        {status === "error" && <span className="settings-status err">Save failed</span>}
+      </div>
+    </div>
   );
 }
 
@@ -798,7 +951,7 @@ function RightSidebar({ synthesis, isLoading, taskId }) {
     alert(`Link copied:\n${url}`);
   };
 
-  const modelColor = (m) => m==="claude"?"#3B82F6":m==="codex"?"#F59E0B":"#A855F7";
+  const modelColor = (m) => MODEL_COLORS[m] || "#94a3b8";
 
   return (
     <aside className="sidebar-right" aria-label="Results panel" data-testid="right-sidebar">
@@ -868,6 +1021,8 @@ function CodingAgentPage({ taskId, initialTask="" }) {
     useTalkPageStream(taskId);
   const [taskDesc, setTaskDesc] = useState(initialTask);
   const [recentTasks, setRecentTasks] = useLocalStorage("cato-recent-tasks", []);
+  const [showSettings, setShowSettings] = useState(false);
+  const [modelConfig, setModelConfig] = useModelConfig("");
 
   useEffect(() => {
     if (taskDesc || !taskId) return;
@@ -894,9 +1049,15 @@ function CodingAgentPage({ taskId, initialTask="" }) {
       <aside className="sidebar-left" aria-label="Task details" data-testid="left-sidebar">
         <div className="sidebar-hdr">
           <span>Task</span>
-          {isLoading && <span style={{color:"#60a5fa",fontSize:"10px"}} role="status" aria-live="polite" data-testid="loading-status">Running...</span>}
+          <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+            {isLoading && <span style={{color:"#60a5fa",fontSize:"10px"}} role="status" aria-live="polite" data-testid="loading-status">Running...</span>}
+            <button className="settings-gear-btn" onClick={() => setShowSettings(s => !s)} aria-label="Model settings" title="Model settings">⚙</button>
+          </div>
         </div>
         <div className="sidebar-body">
+          {showSettings && (
+            <ModelSettingsPanel apiBase="" config={modelConfig} setConfig={setModelConfig} onClose={() => setShowSettings(false)}/>
+          )}
           <TaskInput readOnly={isLoading} defaultTask={taskDesc}
                      onTaskCreated={id => { location.href = `/coding-agent/${id}`; }}/>
 
@@ -934,7 +1095,8 @@ function CodingAgentPage({ taskId, initialTask="" }) {
         <TalkPage task={taskDesc||`Task ${taskId}`} messages={messages}
                   isLoading={isLoading} synthesis={synthesis} error={error}
                   connStatus={connStatus} poolStatus={poolStatus}
-                  tokenTelemetry={tokenTelemetry} endRef={endRef}/>
+                  tokenTelemetry={tokenTelemetry} endRef={endRef}
+                  activeModels={modelConfig.enabled_models}/>
       </div>
 
       {/* Right sidebar */}

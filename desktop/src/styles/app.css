@@ -470,3 +470,186 @@ select:focus-visible {
   outline: 2px solid #3b82f6;
   outline-offset: 2px;
 }
+
+/* ── Model Settings Panel ─────────────────────────────────── */
+.model-settings-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.settings-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-muted);
+}
+
+.settings-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.settings-close:hover { background: var(--bg-card); color: var(--text-primary); }
+
+.settings-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.settings-model-list { display: flex; flex-direction: column; gap: 6px; }
+
+.settings-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  padding: 8px 10px;
+  transition: border-color .15s;
+}
+.settings-model-row.on  { border-color: #334155; }
+.settings-model-row.off { opacity: .55; }
+
+.settings-model-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-model-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.settings-model-name {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.settings-model-desc {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.2;
+}
+
+/* Toggle switch */
+.settings-toggle {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  border: none;
+  cursor: pointer;
+  transition: background .2s;
+  flex-shrink: 0;
+  padding: 0;
+}
+.toggle-on  { background: #3b82f6; }
+.toggle-off { background: #374151; }
+
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left .2s;
+}
+.toggle-on  .toggle-knob { left: 16px; }
+.toggle-off .toggle-knob { left: 2px; }
+
+/* Subagent */
+.settings-subagent-row { display: flex; align-items: center; }
+.settings-subagent-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.settings-subagent-label input[type=checkbox] { accent-color: #3b82f6; }
+
+.settings-backend-select { display: flex; flex-direction: column; gap: 4px; }
+
+.settings-select {
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+}
+.settings-select:focus { border-color: #3b82f6; }
+
+/* Footer */
+.settings-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.settings-save-btn {
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+.settings-save-btn:hover:not(:disabled) { background: #2563eb; }
+.settings-save-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.settings-status { font-size: 11px; font-weight: 600; }
+.settings-status.ok  { color: #86efac; }
+.settings-status.err { color: #fca5a5; }
+
+/* Settings gear button in sidebar */
+.settings-gear-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 5px;
+  line-height: 1;
+  transition: background .15s, color .15s;
+}
+.settings-gear-btn:hover { background: var(--bg-card); color: var(--text-primary); }

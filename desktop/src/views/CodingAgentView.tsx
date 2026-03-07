@@ -8,6 +8,7 @@ import { TalkPage } from "../components/TalkPage";
 import type { SynthesisResult } from "../components/TalkPage";
 import { TaskInput } from "../components/TaskInput";
 import { ConfidenceBadge } from "../components/ConfidenceBadge";
+import { ModelSettings } from "../components/ModelSettings";
 import { useTalkPageStream } from "../hooks/useTalkPageStream";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 
@@ -22,11 +23,12 @@ interface RecentTask {
   createdAt: number;
 }
 
-const MODELS = ["claude", "codex", "gemini"] as const;
+const ALL_MODELS = ["claude", "codex", "gemini", "cursor"] as const;
 const MODEL_CONFIG: Record<string, { label: string; color: string }> = {
   claude: { label: "Claude",  color: "#3B82F6" },
   codex:  { label: "Codex",   color: "#F59E0B" },
   gemini: { label: "Gemini",  color: "#A855F7" },
+  cursor: { label: "Cursor",  color: "#22D3EE" },
 };
 const MAX_RECENT_TASKS = 10;
 
@@ -119,6 +121,7 @@ export const CodingAgentView: React.FC<CodingAgentViewProps> = ({ wsBase, apiBas
   const [taskDescription, setTaskDescription] = useState("");
   const [copiedState, setCopiedState] = useState(false);
   const [recentTasks, setRecentTasks] = useLocalStorage<RecentTask[]>("cato-recent-tasks", []);
+  const [showSettings, setShowSettings] = useState(false);
 
   const { messages, isLoading, synthesis, error, connectionStatus } =
     useTalkPageStream(taskId ?? "", wsBase);
@@ -206,9 +209,27 @@ export const CodingAgentView: React.FC<CodingAgentViewProps> = ({ wsBase, apiBas
       <aside className="sidebar-left" aria-label="Task details">
         <div className="sidebar-header-section">
           <span>Task</span>
-          {isLoading && <span style={{ color: "#60a5fa", fontSize: 11 }}>Running...</span>}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {isLoading && <span style={{ color: "#60a5fa", fontSize: 11 }}>Running...</span>}
+            <button
+              className="settings-gear-btn"
+              onClick={() => setShowSettings((s) => !s)}
+              aria-label="Model settings"
+              title="Model settings"
+            >
+              ⚙
+            </button>
+          </div>
         </div>
         <div className="sidebar-content">
+          {showSettings && (
+            <div style={{ marginBottom: 16 }}>
+              <ModelSettings
+                apiBase={apiBase ?? "http://127.0.0.1:8080"}
+                onClose={() => setShowSettings(false)}
+              />
+            </div>
+          )}
           <TaskInput
             readOnly={isLoading}
             defaultTask={taskDescription}
@@ -247,7 +268,7 @@ export const CodingAgentView: React.FC<CodingAgentViewProps> = ({ wsBase, apiBas
         )}
         <TalkPage
           task={taskDescription || `Task ${taskId}`}
-          models={[...MODELS]}
+          models={[...ALL_MODELS]}
           messages={messages}
           isLoading={isLoading}
           synthesis={synthesis}

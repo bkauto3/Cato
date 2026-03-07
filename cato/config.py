@@ -68,6 +68,9 @@ class CatoConfig:
     selector_healing_enabled: bool = False
     vault: Optional[dict] = None   # API keys / credentials for search, login, etc.
 
+    # Active model toggles — which CLIs are included in coding-agent fan-out
+    enabled_models: list = field(default_factory=lambda: ["claude", "codex", "gemini"])
+
     # Subagent routing (mirrors OpenClaw's ChatGPT-subagent feature)
     # When enabled, TIER_C coding tasks are delegated to the chosen CLI backend
     # so users can leverage plan-included usage from their preferred provider.
