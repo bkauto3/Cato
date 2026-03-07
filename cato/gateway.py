@@ -5,7 +5,7 @@ cato/gateway.py — Central message bus for CATO.
 - Routes messages to per-session FIFO LaneQueues (never interleave sessions)
 - Drives the AgentLoop for each task
 - Sends responses back to the originating channel adapter
-- Exposes a WebSocket + REST server on 127.0.0.1:18789
+- Exposes a WebSocket + REST server on 127.0.0.1:8080
 - Fires cron-scheduled tasks into lane queues via croniter
 """
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 _CATO_DIR      = get_data_dir()
 _WS_HOST       = "127.0.0.1"
-_WS_PORT       = 18789  # default; overridden by config.webchat_port + 1
+_WS_PORT       = 8081   # default; overridden by config.webchat_port + 1
 _LANE_QUEUE_MAX = 64
 
 
@@ -260,7 +260,7 @@ class Gateway:
         return self._lanes[session_id]
 
     # ------------------------------------------------------------------
-    # WebSocket server  (ws://127.0.0.1:18789)
+    # WebSocket server  (ws://127.0.0.1:8081)
     # ------------------------------------------------------------------
 
     async def _run_websocket_server(self) -> None:

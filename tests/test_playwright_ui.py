@@ -70,12 +70,12 @@ def screenshot(page, name):
 
 
 def find_live_port(retries=1, retry_delay=2):
-    """Try ports 19000-19010 to find the running Cato daemon.
+    """Try ports 8080-8090 to find the running Cato daemon.
     retries: number of additional attempts if first pass fails.
     retry_delay: seconds to wait between attempts.
     """
     for attempt in range(retries + 1):
-        for port in [19000, 19001, 19002, 19003, 19004, 19005]:
+        for port in [8080, 8081, 8082, 8083, 8084, 8085]:
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3) as r:
                     data = json.loads(r.read())
@@ -109,7 +109,7 @@ def http_post_json(url, payload):
 def run_tests():
     port = find_live_port()
     if port is None:
-        print("[ERROR] Cato daemon not running on any port 19000-19005. Start it first.")
+        print("[ERROR] Cato daemon not running on any port 8080-8085. Start it first.")
         sys.exit(1)
 
     base = f"http://127.0.0.1:{port}"

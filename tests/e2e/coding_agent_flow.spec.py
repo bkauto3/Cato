@@ -88,7 +88,7 @@ class ServerThread:
 
     def __init__(self):
         self.host    = "127.0.0.1"
-        self.port    = 18765
+        self.port    = 8080
         self.base    = f"http://{self.host}:{self.port}"
         self._thread: Optional[threading.Thread] = None
         self._loop:   Optional[asyncio.AbstractEventLoop] = None

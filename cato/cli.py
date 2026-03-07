@@ -335,7 +335,7 @@ def _run_daemon(config: CatoConfig, agent: str, channel: str) -> None:
         app = await create_ui_app(gateway)
         runner = web.AppRunner(app)
         await runner.setup()
-        port = getattr(cfg, "webchat_port", None) or getattr(cfg, "port", None) or 18789
+        port = getattr(cfg, "webchat_port", None) or getattr(cfg, "port", None) or 8080
         actual_port = port
         for attempt in range(5):
             try:
@@ -887,7 +887,7 @@ def _run_cron_via_ws(entry: dict) -> None:
         return
 
     _config = CatoConfig.load()
-    _ws_port = (getattr(_config, "webchat_port", None) or 8765) + 1
+    _ws_port = (getattr(_config, "webchat_port", None) or 8080) + 1
 
     async def _send() -> None:
         uri = f"ws://127.0.0.1:{_ws_port}"
@@ -934,7 +934,7 @@ def node_list() -> None:
         return
 
     _config = CatoConfig.load()
-    _ws_port = (getattr(_config, "webchat_port", None) or 8765) + 1
+    _ws_port = (getattr(_config, "webchat_port", None) or 8080) + 1
 
     async def _fetch() -> None:
         uri = f"ws://127.0.0.1:{_ws_port}"
@@ -973,7 +973,7 @@ def node_list() -> None:
 def node_info() -> None:
     """Show how to connect a remote node to this Cato instance."""
     config = CatoConfig.load()
-    ws_port = (getattr(config, "webchat_port", None) or 8765) + 1
+    ws_port = (getattr(config, "webchat_port", None) or 8080) + 1
 
     safe_print("\nCato Node Connection Info")
     safe_print("=" * 50)

@@ -1,7 +1,7 @@
 """
 Cato Gateway Watchdog
 =====================
-Polls port 19000 (or CATO_PORT env var) every 30 seconds.
+Polls port 8080 (or CATO_PORT env var) every 30 seconds.
 If the gateway is down, clears the stale PID file and restarts `cato start`.
 
 Run continuously:  python scripts/watchdog.py
@@ -19,7 +19,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-PORT: int = int(os.environ.get("CATO_PORT", "19000"))
+PORT: int = int(os.environ.get("CATO_PORT", "8080"))
 HOST: str = os.environ.get("CATO_HOST", "127.0.0.1")
 POLL_INTERVAL: int = int(os.environ.get("CATO_WATCHDOG_INTERVAL", "30"))  # seconds
 STARTUP_GRACE: int = int(os.environ.get("CATO_WATCHDOG_GRACE", "8"))      # seconds after restart

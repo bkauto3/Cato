@@ -222,8 +222,8 @@ export function useTalkPageStream(
     if (!taskId) return;
 
     // KRAK-4: validate wsBase is localhost-only — desktop app never connects to external hosts
-    const rawHost = wsBase ?? "127.0.0.1:19001";
-    const host = /^127\.0\.0\.1:\d+$/.test(rawHost) ? rawHost : "127.0.0.1:19001";
+    const rawHost = wsBase ?? "127.0.0.1:8081";
+    const host = /^127\.0\.0\.1:\d+$/.test(rawHost) ? rawHost : "127.0.0.1:8081";
     const url  = `ws://${host}/ws/coding-agent/${encodeURIComponent(taskId)}`;
 
     setConnectionStatus("connecting");

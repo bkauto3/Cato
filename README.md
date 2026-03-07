@@ -57,7 +57,7 @@ The wizard asks for:
 ### Start the daemon
 
 ```bash
-cato start                        # WebChat on localhost:8765
+cato start                        # WebChat on localhost:8080
 cato start --channel telegram     # Telegram polling only
 cato start --channel all          # all channels
 ```
@@ -418,7 +418,7 @@ swarmsync_enabled: true
 swarmsync_api_url: https://api.swarmsync.ai/v1/chat/completions
 telegram_enabled: false
 whatsapp_enabled: false
-webchat_port: 8765
+webchat_port: 8080
 max_planning_turns: 2
 context_budget_tokens: 7000
 log_level: INFO

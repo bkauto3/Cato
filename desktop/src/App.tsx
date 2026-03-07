@@ -19,9 +19,9 @@ interface DaemonInfo {
   status: "starting" | "ready" | "stopped" | "error";
 }
 
-// Cato gateway ports: webchat_port 19000 (HTTP), webchat_port+1 19001 (WebSocket)
-const DAEMON_HTTP_PORT = 19000;
-const DAEMON_WS_PORT   = 19001;
+// Cato gateway ports: webchat_port 8080 (HTTP), webchat_port+1 8081 (WebSocket)
+const DAEMON_HTTP_PORT = 8080;
+const DAEMON_WS_PORT   = 8081;
 
 function useDaemonInfo(): DaemonInfo {
   const [info, setInfo] = useState<DaemonInfo>({

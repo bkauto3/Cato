@@ -1,7 +1,7 @@
 """
 cato/adapters/whatsapp.py — WhatsApp channel adapter via Twilio WhatsApp API.
 
-Runs a lightweight aiohttp webhook server on 127.0.0.1:8765.
+Runs a lightweight aiohttp webhook server on 127.0.0.1:8080.
 Twilio sends a POST to /whatsapp/webhook for every inbound message.
 
 Setup:
@@ -9,7 +9,7 @@ Setup:
      dedicated WhatsApp Business number).
   2. Point the Twilio webhook URL to:
        https://<your-host>/whatsapp/webhook
-     For local development use ngrok or Tailscale to expose port 8765.
+     For local development use ngrok or Tailscale to expose port 8080.
   3. Store the following credentials in the Vault:
        twilio_account_sid      — Account SID from Twilio console
        twilio_auth_token       — Auth token from Twilio console
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 _WHATSAPP_MAX_LEN = 1500   # Twilio/WhatsApp practical message limit
 _WEBHOOK_HOST     = "127.0.0.1"
-_WEBHOOK_PORT     = 8765   # separate from WebSocket server on 18789
+_WEBHOOK_PORT     = 8080   # separate from WebSocket server on 8081
 
 
 class WhatsAppAdapter(BaseAdapter):

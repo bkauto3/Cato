@@ -51,7 +51,7 @@ class CatoConfig:
     telegram_enabled: bool = False
     telegram_bot_token: str = ""
     whatsapp_enabled: bool = False
-    webchat_port: int = 8765
+    webchat_port: int = 8080
 
     # Planning
     max_planning_turns: int = 2

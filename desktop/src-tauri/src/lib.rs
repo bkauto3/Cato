@@ -61,8 +61,8 @@ pub fn run() {
         )
         // ── State ──
         .manage(AppState {
-            // Cato gateway: webchat_port 19000 (HTTP) and webchat_port+1 19001 (WebSocket)
-            sidecar: Arc::new(Mutex::new(sidecar::SidecarManager::new(19000, 19001))),
+            // Cato gateway: webchat_port 8080 (HTTP) and webchat_port+1 8081 (WebSocket)
+            sidecar: Arc::new(Mutex::new(sidecar::SidecarManager::new(8080, 8081))),
         })
         // ── Commands ──
         .invoke_handler(tauri::generate_handler![

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Cato Gateway Watchdog — restarts the Cato daemon if port 19000 goes down.</Description>
+    <Description>Cato Gateway Watchdog — restarts the Cato daemon if port 8080 goes down.</Description>
     <Author>Cato</Author>
   </RegistrationInfo>
   <Triggers>
