@@ -40,3 +40,8 @@ CATO_SESSION_*.md
 *_SESSION_*.md
 *_EXECUTION.md
 *_IMPLEMENTATION_REPORT.md
+# Desktop app build artifacts
+desktop/src-tauri/target/
+desktop/dist/
+desktop/node_modules/
+desktop/src-tauri/binaries/
