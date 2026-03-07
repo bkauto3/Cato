@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect } from "react";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ChatView } from "./views/ChatView";
 import { CodingAgentView } from "./views/CodingAgentView";
 import "./styles/app.css";
@@ -102,15 +103,17 @@ function App() {
       {/* Main content */}
       {daemon.status === "ready" && (
         <main className="app-main">
-          {view === "chat" && (
-            <ChatView wsBase={`127.0.0.1:${daemon.wsPort}`} />
-          )}
-          {view === "coding-agent" && (
-            <CodingAgentView
-              wsBase={`127.0.0.1:${daemon.httpPort}`}
-              apiBase={`http://127.0.0.1:${daemon.httpPort}`}
-            />
-          )}
+          <ErrorBoundary>
+            {view === "chat" && (
+              <ChatView wsBase={`127.0.0.1:${daemon.wsPort}`} />
+            )}
+            {view === "coding-agent" && (
+              <CodingAgentView
+                wsBase={`127.0.0.1:${daemon.httpPort}`}
+                apiBase={`http://127.0.0.1:${daemon.httpPort}`}
+              />
+            )}
+          </ErrorBoundary>
         </main>
       )}
 

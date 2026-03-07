@@ -73,7 +73,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ wsBase }) => {
         </span>
       </header>
 
-      <div className="chat-messages">
+      <div className="chat-messages" role="log" aria-live="polite" aria-label="Chat messages">
         {messages.length === 0 && (
           <div className="chat-empty">
             <div className="chat-empty-icon">C</div>
@@ -107,6 +107,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ wsBase }) => {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+          aria-label="Type a message"
           rows={2}
           disabled={connectionStatus !== "connected"}
           autoFocus

@@ -31,19 +31,36 @@ impl SidecarManager {
         self.ws_port
     }
 
-    pub fn is_running(&self) -> bool {
-        self.child.is_some()
+    /// Check if the daemon process is actually still running.
+    /// Uses try_wait() to detect crashed processes.
+    pub async fn is_running(&mut self) -> bool {
+        if let Some(ref mut child) = self.child {
+            match child.try_wait() {
+                Ok(Some(_status)) => {
+                    // Process has exited — clean up
+                    self.child = None;
+                    false
+                }
+                Ok(None) => true,   // Still running
+                Err(_) => {
+                    self.child = None;
+                    false
+                }
+            }
+        } else {
+            false
+        }
     }
 
     /// Start the Cato daemon as a child process.
     ///
     /// Tries the bundled sidecar binary first, falls back to system `cato`.
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if self.child.is_some() {
-            return Ok(()); // Already running
+        // Check if already running (handle crashed state)
+        if self.is_running().await {
+            return Ok(());
         }
 
-        // Try to find the cato binary
         let cato_bin = Self::find_cato_binary();
 
         log::info!("Starting Cato daemon: {} start --channel webchat", cato_bin);
@@ -120,8 +137,6 @@ impl SidecarManager {
 
     /// Find the cato binary — try sidecar path first, then PATH.
     fn find_cato_binary() -> String {
-        // In a bundled app, the sidecar would be at a known location.
-        // For development, just use the system `cato` command.
         if let Ok(exe) = std::env::current_exe() {
             let sidecar = exe.parent().unwrap_or(exe.as_path()).join("cato");
             if sidecar.exists() {
@@ -136,8 +151,6 @@ impl SidecarManager {
 
 impl Drop for SidecarManager {
     fn drop(&mut self) {
-        // Kill the child process if it's still running when the manager is dropped.
-        // This is a last resort — prefer calling stop() explicitly.
         if let Some(mut child) = self.child.take() {
             let _: Result<(), std::io::Error> = child.start_kill();
         }

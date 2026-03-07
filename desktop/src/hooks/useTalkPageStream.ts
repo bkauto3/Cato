@@ -135,14 +135,26 @@ export function useTalkPageStream(
         case "codex_response":
         case "gemini_response": {
           const model = event.replace("_response", "");
+          // Runtime validation — coerce types safely
+          const rawId = typeof data.id === "string" ? data.id : crypto.randomUUID();
+          const rawTimestamp = typeof data.timestamp === "number" ? data.timestamp : Date.now();
+          const rawText = typeof data.text === "string" ? data.text.slice(0, 100_000) : "";
+          const rawConfidence = typeof data.confidence === "number"
+            ? Math.max(0, Math.min(1, data.confidence))
+            : 0.75;
+          const rawReasoning = typeof data.reasoning === "string"
+            ? data.reasoning.slice(0, 50_000) : undefined;
+          const rawCode = typeof data.code === "string"
+            ? data.code.slice(0, 100_000) : undefined;
+
           const msg: TalkMessage = {
-            id:         (data.id as string) ?? crypto.randomUUID(),
+            id: rawId,
             model,
-            timestamp:  (data.timestamp as number) ?? Date.now(),
-            text:       (data.text as string) ?? "",
-            confidence: (data.confidence as number) ?? 0.75,
-            reasoning:  data.reasoning as string | undefined,
-            code:       data.code as string | undefined,
+            timestamp: rawTimestamp,
+            text: rawText,
+            confidence: rawConfidence,
+            reasoning: rawReasoning,
+            code: rawCode,
           };
           setMessages((prev) => [...prev, msg]);
           scrollToBottom();
@@ -151,9 +163,27 @@ export function useTalkPageStream(
         }
 
         case "synthesis_complete": {
+          // Validate synthesis data structure
+          const primary = data.primary as Record<string, unknown> | undefined;
+          if (!primary || typeof primary.model !== "string" || typeof primary.response !== "string") {
+            console.warn("[useTalkPageStream] Invalid synthesis_complete data");
+            break;
+          }
           const syn: SynthesisResult = {
-            primary:    data.primary as SynthesisResult["primary"],
-            runners_up: (data.runners_up as SynthesisResult["runners_up"]) ?? [],
+            primary: {
+              model: primary.model,
+              response: String(primary.response).slice(0, 100_000),
+              confidence: typeof primary.confidence === "number" ? primary.confidence : 0,
+              confidence_level: typeof primary.confidence_level === "string" ? primary.confidence_level : "low",
+            },
+            runners_up: Array.isArray(data.runners_up)
+              ? (data.runners_up as Array<Record<string, unknown>>).map((r) => ({
+                  model: String(r.model ?? ""),
+                  response: String(r.response ?? "").slice(0, 100_000),
+                  confidence: typeof r.confidence === "number" ? r.confidence : 0,
+                  confidence_level: typeof r.confidence_level === "string" ? r.confidence_level : "low",
+                }))
+              : [],
             early_exit: Boolean(data.early_exit),
           };
           setSynthesis(syn);

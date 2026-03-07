@@ -6,7 +6,7 @@
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{
-    AppHandle, Manager, RunEvent, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, WindowEvent,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
@@ -30,9 +30,9 @@ struct DaemonStatus {
 /// Tauri command: get daemon status
 #[tauri::command]
 async fn get_daemon_status(state: tauri::State<'_, AppState>) -> Result<DaemonStatus, String> {
-    let mgr = state.sidecar.lock().await;
+    let mut mgr = state.sidecar.lock().await;
     Ok(DaemonStatus {
-        running: mgr.is_running(),
+        running: mgr.is_running().await,
         http_port: mgr.http_port(),
         ws_port: mgr.ws_port(),
     })
@@ -78,12 +78,14 @@ pub fn run() {
             // ── Global Shortcut ──
             setup_global_shortcut(&handle);
 
-            // ── Start sidecar ──
+            // ── Start sidecar with crash monitoring ──
             let sidecar = handle.state::<AppState>().sidecar.clone();
+            let emit_handle = handle.clone();
             tauri::async_runtime::spawn(async move {
                 let mut mgr = sidecar.lock().await;
                 if let Err(e) = mgr.start().await {
                     log::error!("Failed to start Cato daemon: {}", e);
+                    let _ = emit_handle.emit("daemon-error", e.to_string());
                 }
             });
 
@@ -108,10 +110,9 @@ pub fn run() {
                     }
                 }
                 RunEvent::ExitRequested { .. } => {
-                    // Cleanup sidecar on exit
-                    let state = app_handle.state::<AppState>();
-                    let sidecar = state.sidecar.clone();
-                    tauri::async_runtime::block_on(async {
+                    // Cleanup sidecar on exit — use spawn to avoid deadlock
+                    let sidecar = app_handle.state::<AppState>().sidecar.clone();
+                    tauri::async_runtime::spawn(async move {
                         let mut mgr = sidecar.lock().await;
                         mgr.stop().await;
                     });
@@ -142,8 +143,7 @@ fn setup_tray(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 "restart" => {
-                    let state = app.state::<AppState>();
-                    let sidecar = state.sidecar.clone();
+                    let sidecar = app.state::<AppState>().sidecar.clone();
                     tauri::async_runtime::spawn(async move {
                         let mut mgr = sidecar.lock().await;
                         mgr.stop().await;
@@ -153,13 +153,15 @@ fn setup_tray(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
                 "quit" => {
-                    let state = app.state::<AppState>();
-                    let sidecar = state.sidecar.clone();
-                    tauri::async_runtime::block_on(async {
+                    // Spawn cleanup then exit — avoids block_on deadlock
+                    let sidecar = app.state::<AppState>().sidecar.clone();
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
                         let mut mgr = sidecar.lock().await;
                         mgr.stop().await;
+                        drop(mgr); // Release lock before exit
+                        app_handle.exit(0);
                     });
-                    app.exit(0);
                 }
                 _ => {}
             }
