@@ -94,11 +94,12 @@ body {
 }
 
 .sidebar-logo {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
   object-fit: contain;
   image-rendering: -webkit-optimize-contrast;
+  flex-shrink: 0;
 }
 
 .sidebar-brand-name {

@@ -83,7 +83,7 @@ function renderView(view: View, daemon: DaemonInfo, onNavigate: (v: View) => voi
     case "coding-agent":
       return (
         <CodingAgentView
-          wsBase={`127.0.0.1:${wsPort}`}
+          wsBase={`127.0.0.1:${httpPort}`}
           apiBase={`http://127.0.0.1:${httpPort}`}
         />
       );

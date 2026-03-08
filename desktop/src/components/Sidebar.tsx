@@ -5,7 +5,7 @@
  * Renders brand header, grouped nav items, and daemon status at bottom.
  */
 import React from "react";
-import logoSrc from "../assets/cato-logo.jpeg";
+import logoSrc from "../assets/cato-logo.png";
 
 export type View =
   | "dashboard"

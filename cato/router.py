@@ -106,9 +106,11 @@ class ModelRouter:
 
     def select_model(self, score: float, task_type: Optional[str] = None) -> str:
         """Return native model ID for score band, respecting blocked/preferred config."""
-        pool = _ECONOMY if score < 0.35 else (_MID if score < 0.70 else _PREMIUM)
-        if self._preferred and self._preferred not in self._blocked and self._preferred in pool:
+        # Always honour preferred_model if set and not blocked — even if it's an
+        # openrouter/ or other external model not in the local pool lists.
+        if self._preferred and self._preferred not in self._blocked:
             return self._preferred
+        pool = _ECONOMY if score < 0.35 else (_MID if score < 0.70 else _PREMIUM)
         for m in pool:
             if m not in self._blocked:
                 return m
@@ -221,7 +223,9 @@ class ModelRouter:
 
     async def _openai_compat(self, messages: list[dict], model: str, tools: list[dict],
                               api_key: str, base_url: str) -> AsyncIterator[str]:
-        payload: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+        # OpenRouter expects "provider/model" not "openrouter/provider/model"
+        api_model = model.removeprefix("openrouter/") if model.startswith("openrouter/") else model
+        payload: dict[str, Any] = {"model": api_model, "messages": messages, "stream": True}
         if tools:
             payload["tools"] = tools
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}

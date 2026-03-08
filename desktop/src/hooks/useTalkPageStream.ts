@@ -34,7 +34,8 @@ export interface UseTalkPageStreamResult {
 const MAX_RETRIES          = 5;
 const INITIAL_BACKOFF_MS   = 500;
 const MAX_BACKOFF_MS       = 16_000;
-const HEARTBEAT_TIMEOUT_MS = 3_000;
+// Server sends heartbeats every 30 s — give it 45 s before declaring reconnecting
+const HEARTBEAT_TIMEOUT_MS = 45_000;
 const TASK_TIMEOUT_MS      = 5_000;
 
 export function useTalkPageStream(
@@ -219,7 +220,8 @@ export function useTalkPageStream(
 
   const connect = useCallback(() => {
     if (closedRef.current) return;
-    if (!taskId) return;
+    // Don't connect until a real task ID exists (empty string = no task submitted yet)
+    if (!taskId || taskId.trim() === "") return;
 
     // KRAK-4: validate wsBase is localhost-only — desktop app never connects to external hosts
     const rawHost = wsBase ?? "127.0.0.1:8081";
