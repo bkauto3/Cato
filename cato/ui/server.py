@@ -50,6 +50,27 @@ _CODING_AGENT   = Path(__file__).parent / "coding_agent.html"
 _START_TIME     = time.monotonic()
 
 
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    """Add CORS headers so the Tauri WebView2 (tauri://localhost origin) can
+    reach the daemon at http://127.0.0.1:8080 without being blocked."""
+    # Handle pre-flight OPTIONS requests
+    if request.method == "OPTIONS":
+        return web.Response(
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            },
+        )
+    response = await handler(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
+
+
 async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
     """Create and return the aiohttp Application serving the dashboard.
 
@@ -57,7 +78,7 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
         gateway: The Gateway instance. May be None for standalone testing;
                  pages will render but WebSocket will show disconnected state.
     """
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
 
     # ------------------------------------------------------------------ #
     # Route handlers                                                       #
