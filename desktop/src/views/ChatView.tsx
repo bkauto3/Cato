@@ -9,6 +9,7 @@ import { useChatStream, type ChatMessage } from "../hooks/useChatStream";
 
 interface ChatViewProps {
   wsBase?: string;
+  httpPort?: number;
 }
 
 const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
