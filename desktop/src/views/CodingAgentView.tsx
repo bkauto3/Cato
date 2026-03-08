@@ -23,12 +23,11 @@ interface RecentTask {
   createdAt: number;
 }
 
-const ALL_MODELS = ["claude", "codex", "gemini", "cursor"] as const;
+const ALL_MODELS = ["codex", "cursor", "gemini"] as const;
 const MODEL_CONFIG: Record<string, { label: string; color: string }> = {
-  claude: { label: "Claude",  color: "#3B82F6" },
   codex:  { label: "Codex",   color: "#F59E0B" },
-  gemini: { label: "Gemini",  color: "#A855F7" },
   cursor: { label: "Cursor",  color: "#22D3EE" },
+  gemini: { label: "Gemini",  color: "#A855F7" },
 };
 const MAX_RECENT_TASKS = 10;
 
@@ -123,7 +122,7 @@ export const CodingAgentView: React.FC<CodingAgentViewProps> = ({ wsBase, apiBas
   const [recentTasks, setRecentTasks] = useLocalStorage<RecentTask[]>("cato-recent-tasks", []);
   const [showSettings, setShowSettings] = useState(false);
 
-  const { messages, isLoading, synthesis, error, connectionStatus } =
+  const { messages, isLoading, synthesis, error, connectionStatus, cancel } =
     useTalkPageStream(taskId ?? "", wsBase);
 
   React.useEffect(() => {
@@ -174,7 +173,7 @@ export const CodingAgentView: React.FC<CodingAgentViewProps> = ({ wsBase, apiBas
           <div className="coding-entry-icon">C</div>
           <h1 className="coding-entry-title">Cato Coding Agent</h1>
           <p className="coding-entry-subtitle">
-            Submit a task to get responses from Claude, Codex, and Gemini
+            Submit a task to get responses from Codex, Cursor, and Gemini
           </p>
           <TaskInput
             onTaskCreated={handleTaskCreated}
@@ -210,7 +209,15 @@ export const CodingAgentView: React.FC<CodingAgentViewProps> = ({ wsBase, apiBas
         <div className="sidebar-header-section">
           <span>Task</span>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {isLoading && <span style={{ color: "#60a5fa", fontSize: 11 }}>Running...</span>}
+            {isLoading && (
+              <button
+                className="btn-cancel-sm"
+                onClick={cancel}
+                title="Cancel task"
+              >
+                ✕ Cancel
+              </button>
+            )}
             <button
               className="settings-gear-btn"
               onClick={() => setShowSettings((s) => !s)}

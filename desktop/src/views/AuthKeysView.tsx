@@ -10,19 +10,35 @@ interface AuthKeysViewProps {
 
 // Which vault keys go here and what they're for
 const VAULT_KEY_META: Record<string, string> = {
-  SWARMSYNC_API_KEY:       "Chat routing (sk-ss-…) — required for chat",
-  brave_api_key:           "Brave web search (Conduit)",
-  exa_api_key:             "Exa semantic search (Conduit)",
-  tavily_api_key:          "Tavily web search (Conduit)",
-  perplexity_api_key:      "Perplexity deep search (Conduit)",
-  semantic_scholar_api_key:"Semantic Scholar academic search (Conduit)",
+  OPENROUTER_API_KEY: "OpenRouter API key — required for chat (sk-or-…)",
+  TELEGRAM_BOT_TOKEN: "Telegram bot token — Cato's Telegram interface",
+  brave_api_key:      "Brave web search",
+  exa_api_key:        "Exa semantic search",
+  tavily_api_key:     "Tavily web search",
 };
 
 const CLI_BACKENDS = [
-  { id: "claude",  label: "Claude",       loginCmd: "claude login",  logoutCmd: "claude auth logout" },
-  { id: "codex",   label: "Codex",        loginCmd: "codex login",   logoutCmd: "codex logout" },
-  { id: "gemini",  label: "Gemini",       loginCmd: "gemini login",  logoutCmd: "gemini auth logout" },
-  { id: "cursor",  label: "Cursor Agent", loginCmd: "agent login",   logoutCmd: "agent logout" },
+  {
+    id: "codex",
+    label: "Codex",
+    status: "working",
+    note: "No login needed — runs locally via warm pool",
+    loginCmd: null,
+  },
+  {
+    id: "cursor",
+    label: "Cursor Agent",
+    status: "working",
+    note: "Uses Cursor IDE session — log in via Cursor IDE",
+    loginCmd: null,
+  },
+  {
+    id: "gemini",
+    label: "Gemini",
+    status: "degraded",
+    note: "Hangs in non-interactive mode on this machine — timeout/degraded",
+    loginCmd: "gemini auth login",
+  },
 ] as const;
 
 export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
@@ -31,7 +47,7 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
   const [config, setConfig] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
 
-  // SwarmSync key entry
+  // OpenRouter key entry
   const [ssKey, setSsKey] = useState("");
   const [ssSaving, setSsSaving] = useState(false);
   const [ssMsg, setSsMsg] = useState("");
@@ -68,7 +84,7 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
       const r = await fetch(`${base}/api/vault/set`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "SWARMSYNC_API_KEY", value: ssKey.trim() }),
+        body: JSON.stringify({ key: "OPENROUTER_API_KEY", value: ssKey.trim() }),
       });
       const d = await r.json();
       if (d.status === "ok") {
@@ -115,7 +131,7 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
     await fetchData();
   };
 
-  const hasSwarmSync = vaultKeys.includes("SWARMSYNC_API_KEY");
+  const hasOpenRouter = vaultKeys.includes("OPENROUTER_API_KEY");
 
   if (loading) return <div className="view-loading"><div className="app-loading-spinner" /></div>;
 
@@ -127,32 +143,32 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
       </div>
 
       <div className="info-note">
-        You do <strong>NOT</strong> need Anthropic / OpenAI / Google API keys.
-        Claude, Codex, and Gemini coding backends use CLI OAuth (login once, no key needed).
+        Chat uses <strong>OpenRouter</strong> (one key, all models).
+        Coding agents (Codex, Cursor) use local sessions — no API keys required.
       </div>
 
-      {/* SwarmSync */}
+      {/* OpenRouter Key */}
       <div className="section-block">
         <div className="section-title">
-          SwarmSync Key
-          {hasSwarmSync
+          OpenRouter API Key
+          {hasOpenRouter
             ? <span className="badge-green">Configured</span>
-            : <span className="badge-red">Missing — chat will return 401</span>}
+            : <span className="badge-red">Missing — chat will fail</span>}
         </div>
         <div className="section-desc">
-          Chat routing key (sk-ss-…). SwarmSync picks the best model automatically.
-          One key covers all providers — no per-provider keys needed.
+          Routes chat to any LLM (MiniMax, GPT-4o, Claude, etc.) via OpenRouter.
+          Get your key at <strong>openrouter.ai/keys</strong> (sk-or-…).
         </div>
-        {!hasSwarmSync && (
+        {!hasOpenRouter && (
           <div className="warn-banner">
-            ⚠ Chat requires a SwarmSync key. Enter it below.
+            ⚠ Chat requires an OpenRouter API key. Enter it below.
           </div>
         )}
         <div className="form-row">
           <input
             type="password"
             className="form-input form-input-wide"
-            placeholder="sk-ss-..."
+            placeholder="sk-or-..."
             value={ssKey}
             onChange={(e) => setSsKey(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && saveSwarmSyncKey()}
@@ -162,36 +178,35 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
           </button>
           {ssMsg && <span className="save-msg">{ssMsg}</span>}
         </div>
-
-        {/* SwarmSync config fields */}
         <div className="form-row" style={{ marginTop: 8 }}>
-          <label>SwarmSync Enabled</label>
-          <span className={`badge ${config.swarmsync_enabled ? "badge-green" : "badge-gray"}`}>
-            {config.swarmsync_enabled ? "Yes" : "No"}
-          </span>
-        </div>
-        <div className="form-row">
-          <label>API URL</label>
-          <code className="code-cell">{String(config.swarmsync_api_url ?? "https://api.swarmsync.ai/v1/chat/completions")}</code>
+          <label>Current Model</label>
+          <code className="code-cell">{String(config.default_model ?? "openrouter/minimax/minimax-m2.5")}</code>
         </div>
       </div>
 
-      {/* CLI OAuth status */}
+      {/* CLI backend status */}
       <div className="section-block">
-        <div className="section-title">CLI OAuth Status</div>
+        <div className="section-title">Coding Agent Backends</div>
         <div className="section-desc">
-          Coding agent backends authenticate via CLI — no API keys needed.
-          Run login commands in a terminal; Cato reuses the stored session.
+          Coding tasks dispatch to these CLI backends. Status reflects configuration on this machine.
         </div>
         <div className="cli-status-list">
           {CLI_BACKENDS.map((cli) => (
             <div key={cli.id} className="cli-status-row">
               <div className="cli-status-info">
                 <span className="cli-label">{cli.label}</span>
-                <code className="cli-cmd">{cli.loginCmd}</code>
+                <span
+                  className={cli.status === "working" ? "badge-green" : "badge-yellow"}
+                  style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, fontWeight: 700 }}
+                >
+                  {cli.status === "working" ? "Working" : "Degraded"}
+                </span>
               </div>
               <div className="cli-status-actions">
-                <span className="cli-note">Run in terminal to authenticate</span>
+                <span className="cli-note">{cli.note}</span>
+                {cli.loginCmd && (
+                  <code className="cli-cmd" style={{ marginTop: 4 }}>{cli.loginCmd}</code>
+                )}
               </div>
             </div>
           ))}

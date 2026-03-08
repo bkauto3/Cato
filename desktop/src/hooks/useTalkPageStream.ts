@@ -22,6 +22,8 @@ export type ConnectionStatus =
   | "disconnected"
   | "closed";
 
+export type CancelFn = () => void;
+
 export interface UseTalkPageStreamResult {
   messages: TalkMessage[];
   isLoading: boolean;
@@ -29,6 +31,7 @@ export interface UseTalkPageStreamResult {
   error: string | null;
   connectionStatus: ConnectionStatus;
   messagesEndRef: MutableRefObject<HTMLDivElement | null>;
+  cancel: CancelFn;
 }
 
 const MAX_RETRIES          = 5;
@@ -289,7 +292,20 @@ export function useTalkPageStream(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
-  return { messages, isLoading, synthesis, error, connectionStatus, messagesEndRef };
+  const cancel = useCallback(() => {
+    closedRef.current = true;
+    clearHeartbeatTimer();
+    clearTaskTimeout();
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setIsLoading(false);
+    setConnectionStatus("closed");
+  }, [clearHeartbeatTimer, clearTaskTimeout]);
+
+  return { messages, isLoading, synthesis, error, connectionStatus, messagesEndRef, cancel };
 }
 
 export default useTalkPageStream;

@@ -996,9 +996,10 @@ body {
 
 /* ── Badges ───────────────────────────────────────────────── */
 .badge { padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 700; }
-.badge-green { background: #14532d44; color: #86efac; }
-.badge-red   { background: #7f1d1d44; color: #fca5a5; }
-.badge-gray  { background: var(--bg-card); color: var(--text-muted); }
+.badge-green  { background: #14532d44; color: #86efac; }
+.badge-red    { background: #7f1d1d44; color: #fca5a5; }
+.badge-gray   { background: var(--bg-card); color: var(--text-muted); }
+.badge-yellow { background: #78350f44; color: #fcd34d; }
 
 /* ── Dashboard ────────────────────────────────────────────── */
 .dash-view {
@@ -1621,3 +1622,17 @@ select:focus-visible {
   transition: background .15s, color .15s;
 }
 .settings-gear-btn:hover { background: var(--bg-card); color: var(--text-primary); }
+
+.btn-cancel-sm {
+  background: transparent;
+  border: 1px solid #7f1d1d;
+  border-radius: 5px;
+  color: #fca5a5;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: background .15s;
+  line-height: 1;
+}
+.btn-cancel-sm:hover { background: #7f1d1d44; }
