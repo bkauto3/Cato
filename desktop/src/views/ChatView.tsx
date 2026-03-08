@@ -1,23 +1,40 @@
 /**
- * ChatView.tsx — Simple single-model chat interface.
- *
- * Connects to the Cato gateway WebSocket for general conversation.
+ * ChatView.tsx — Chat interface. Persists history across navigation, shows Telegram messages.
  */
 
 import React, { useState, useRef, useEffect, useCallback, type FormEvent } from "react";
 import { useChatStream, type ChatMessage } from "../hooks/useChatStream";
+import logoSrc from "../assets/cato-logo.png";
 
 interface ChatViewProps {
   wsBase?: string;
   httpPort?: number;
 }
 
+const SourceBadge: React.FC<{ source?: string }> = ({ source }) => {
+  if (!source || source === "web") return null;
+  const label = source === "telegram" ? "Telegram" : source;
+  const color = source === "telegram" ? "#229ED9" : "#94a3b8";
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 8,
+      background: `${color}22`, color, border: `1px solid ${color}55`,
+      marginLeft: 6, lineHeight: 1.4,
+    }}>
+      {label}
+    </span>
+  );
+};
+
 const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
   const isUser = message.role === "user";
   return (
     <div className={`chat-bubble ${isUser ? "chat-bubble-user" : "chat-bubble-assistant"}`}>
       <div className="chat-bubble-header">
-        <span className="chat-bubble-role">{isUser ? "You" : "Cato"}</span>
+        <span className="chat-bubble-role">
+          {isUser ? "You" : "Cato"}
+          <SourceBadge source={message.source} />
+        </span>
         <time className="chat-bubble-time">
           {new Date(message.timestamp).toLocaleTimeString([], {
             hour: "2-digit",
@@ -30,8 +47,9 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
   );
 };
 
-export const ChatView: React.FC<ChatViewProps> = ({ wsBase }) => {
-  const { messages, connectionStatus, sendMessage, isStreaming } = useChatStream(wsBase);
+export const ChatView: React.FC<ChatViewProps> = ({ wsBase, httpPort }) => {
+  const { messages, connectionStatus, sendMessage, isStreaming, clearHistory } =
+    useChatStream(wsBase, httpPort);
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -66,21 +84,38 @@ export const ChatView: React.FC<ChatViewProps> = ({ wsBase }) => {
     <div className="chat-view">
       <header className="chat-header">
         <h1 className="chat-title">Cato Chat</h1>
-        <span className={`chat-status chat-status-${connectionStatus}`}>
-          {connectionStatus === "connected" ? "Connected" :
-           connectionStatus === "connecting" ? "Connecting..." :
-           connectionStatus === "reconnecting" ? "Reconnecting..." :
-           "Disconnected"}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className={`chat-status chat-status-${connectionStatus}`}>
+            {connectionStatus === "connected"    ? "Connected"      :
+             connectionStatus === "connecting"   ? "Connecting..."  :
+             connectionStatus === "reconnecting" ? "Reconnecting..."
+                                                 : "Disconnected"}
+          </span>
+          {messages.length > 0 && (
+            <button
+              className="btn-cancel-sm"
+              onClick={clearHistory}
+              title="Clear conversation history"
+              style={{ fontSize: 11 }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="chat-messages" role="log" aria-live="polite" aria-label="Chat messages">
         {messages.length === 0 && (
           <div className="chat-empty">
-            <div className="chat-empty-icon">C</div>
+            <img
+              src={logoSrc}
+              alt="Cato"
+              className="chat-empty-logo"
+            />
             <p>Start a conversation with Cato</p>
             <p className="chat-empty-hint">
               Ask questions, get help with code, or explore ideas.
+              Telegram messages appear here too.
             </p>
           </div>
         )}

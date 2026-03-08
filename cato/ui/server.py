@@ -202,6 +202,18 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
             logger.error("list_sessions error: %s", exc)
             return web.json_response([], status=500)
 
+    async def chat_history(request: web.Request) -> web.Response:
+        """GET /api/chat/history — cross-channel message history (web + Telegram)."""
+        try:
+            since_ts = int(request.rel_url.query.get("since", "0"))
+            if gateway is None:
+                return web.json_response([])
+            entries = gateway.get_message_history(since_ts=since_ts)
+            return web.json_response(entries)
+        except Exception as exc:
+            logger.error("chat_history error: %s", exc)
+            return web.json_response([], status=500)
+
     async def kill_session(request: web.Request) -> web.Response:
         """DELETE /api/sessions/{session_id} — stop a session lane."""
         session_id = request.match_info.get("session_id", "")
@@ -910,6 +922,8 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
     app.router.add_get("/api/sessions",                  list_sessions)
     app.router.add_delete("/api/sessions/{session_id}",  kill_session)
     app.router.add_post("/api/compact",                  compact_session)
+    # Cross-channel chat history (web + Telegram)
+    app.router.add_get("/api/chat/history",              chat_history)
     # Skills
     app.router.add_get("/api/skills",                         list_skills)
     app.router.add_get("/api/skills/{name}/content",          get_skill_content)

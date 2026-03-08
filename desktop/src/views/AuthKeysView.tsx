@@ -10,11 +10,12 @@ interface AuthKeysViewProps {
 
 // Which vault keys go here and what they're for
 const VAULT_KEY_META: Record<string, string> = {
-  OPENROUTER_API_KEY: "OpenRouter API key — required for chat (sk-or-…)",
-  TELEGRAM_BOT_TOKEN: "Telegram bot token — Cato's Telegram interface",
-  brave_api_key:      "Brave web search",
-  exa_api_key:        "Exa semantic search",
-  tavily_api_key:     "Tavily web search",
+  OPENROUTER_API_KEY:  "OpenRouter API key — chat via OpenRouter (sk-or-…)",
+  SWARMSYNC_API_KEY:   "SwarmSync routing key — alternative chat backend (sk-ss-…)",
+  TELEGRAM_BOT_TOKEN:  "Telegram bot token — Cato's Telegram interface",
+  brave_api_key:       "Brave web search",
+  exa_api_key:         "Exa semantic search",
+  tavily_api_key:      "Tavily web search",
 };
 
 const CLI_BACKENDS = [
@@ -33,6 +34,13 @@ const CLI_BACKENDS = [
     loginCmd: null,
   },
   {
+    id: "claude",
+    label: "Claude Code",
+    status: "working",
+    note: "CLI agent — run 'claude login' once to authenticate",
+    loginCmd: "claude login",
+  },
+  {
     id: "gemini",
     label: "Gemini",
     status: "degraded",
@@ -48,6 +56,10 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
   const [loading, setLoading] = useState(true);
 
   // OpenRouter key entry
+  const [orKey, setOrKey] = useState("");
+  const [orSaving, setOrSaving] = useState(false);
+  const [orMsg, setOrMsg] = useState("");
+  // SwarmSync key entry
   const [ssKey, setSsKey] = useState("");
   const [ssSaving, setSsSaving] = useState(false);
   const [ssMsg, setSsMsg] = useState("");
@@ -77,28 +89,31 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
     fetchData();
   }, [fetchData]);
 
-  const saveSwarmSyncKey = async () => {
-    if (!ssKey.trim()) return;
-    setSsSaving(true);
+  const saveVaultKey = async (
+    vaultKey: string, value: string,
+    setMsg: (m: string) => void, setSaving: (s: boolean) => void, clearVal: () => void,
+  ) => {
+    if (!value.trim()) return;
+    setSaving(true);
     try {
       const r = await fetch(`${base}/api/vault/set`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "OPENROUTER_API_KEY", value: ssKey.trim() }),
+        body: JSON.stringify({ key: vaultKey, value: value.trim() }),
       });
       const d = await r.json();
       if (d.status === "ok") {
-        setSsMsg("Saved");
-        setSsKey("");
+        setMsg("Saved");
+        clearVal();
         await fetchData();
       } else {
-        setSsMsg(`Error: ${d.message}`);
+        setMsg(`Error: ${d.message}`);
       }
     } catch (e) {
-      setSsMsg(String(e));
+      setMsg(String(e));
     } finally {
-      setSsSaving(false);
-      setTimeout(() => setSsMsg(""), 3000);
+      setSaving(false);
+      setTimeout(() => setMsg(""), 3000);
     }
   };
 
@@ -131,7 +146,8 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
     await fetchData();
   };
 
-  const hasOpenRouter = vaultKeys.includes("OPENROUTER_API_KEY");
+  const hasOpenRouter  = vaultKeys.includes("OPENROUTER_API_KEY");
+  const hasSwarmSync   = vaultKeys.includes("SWARMSYNC_API_KEY");
 
   if (loading) return <div className="view-loading"><div className="app-loading-spinner" /></div>;
 
@@ -143,7 +159,7 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
       </div>
 
       <div className="info-note">
-        Chat uses <strong>OpenRouter</strong> (one key, all models).
+        Chat routes through <strong>OpenRouter</strong> or <strong>SwarmSync</strong>.
         Coding agents (Codex, Cursor) use local sessions — no API keys required.
       </div>
 
@@ -153,34 +169,63 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
           OpenRouter API Key
           {hasOpenRouter
             ? <span className="badge-green">Configured</span>
-            : <span className="badge-red">Missing — chat will fail</span>}
+            : <span className="badge-red">Missing</span>}
         </div>
         <div className="section-desc">
-          Routes chat to any LLM (MiniMax, GPT-4o, Claude, etc.) via OpenRouter.
-          Get your key at <strong>openrouter.ai/keys</strong> (sk-or-…).
+          Routes chat to any LLM (MiniMax, GPT-4o, Claude, etc.) via openrouter.ai (sk-or-…).
         </div>
-        {!hasOpenRouter && (
-          <div className="warn-banner">
-            ⚠ Chat requires an OpenRouter API key. Enter it below.
-          </div>
-        )}
         <div className="form-row">
           <input
             type="password"
             className="form-input form-input-wide"
             placeholder="sk-or-..."
-            value={ssKey}
-            onChange={(e) => setSsKey(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && saveSwarmSyncKey()}
+            value={orKey}
+            onChange={(e) => setOrKey(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && saveVaultKey("OPENROUTER_API_KEY", orKey, setOrMsg, setOrSaving, () => setOrKey(""))}
           />
-          <button className="btn-primary" onClick={saveSwarmSyncKey} disabled={ssSaving || !ssKey.trim()}>
-            {ssSaving ? "Saving…" : "Save"}
+          <button
+            className="btn-primary"
+            onClick={() => saveVaultKey("OPENROUTER_API_KEY", orKey, setOrMsg, setOrSaving, () => setOrKey(""))}
+            disabled={orSaving || !orKey.trim()}
+          >
+            {orSaving ? "Saving…" : "Save"}
           </button>
-          {ssMsg && <span className="save-msg">{ssMsg}</span>}
+          {orMsg && <span className="save-msg">{orMsg}</span>}
         </div>
         <div className="form-row" style={{ marginTop: 8 }}>
           <label>Current Model</label>
           <code className="code-cell">{String(config.default_model ?? "openrouter/minimax/minimax-m2.5")}</code>
+        </div>
+      </div>
+
+      {/* SwarmSync Key */}
+      <div className="section-block">
+        <div className="section-title">
+          SwarmSync Key
+          {hasSwarmSync
+            ? <span className="badge-green">Configured</span>
+            : <span className="badge-gray">Optional</span>}
+        </div>
+        <div className="section-desc">
+          Alternative chat routing via SwarmSync (sk-ss-…). Picks the best model automatically.
+        </div>
+        <div className="form-row">
+          <input
+            type="password"
+            className="form-input form-input-wide"
+            placeholder="sk-ss-..."
+            value={ssKey}
+            onChange={(e) => setSsKey(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && saveVaultKey("SWARMSYNC_API_KEY", ssKey, setSsMsg, setSsSaving, () => setSsKey(""))}
+          />
+          <button
+            className="btn-primary"
+            onClick={() => saveVaultKey("SWARMSYNC_API_KEY", ssKey, setSsMsg, setSsSaving, () => setSsKey(""))}
+            disabled={ssSaving || !ssKey.trim()}
+          >
+            {ssSaving ? "Saving…" : "Save"}
+          </button>
+          {ssMsg && <span className="save-msg">{ssMsg}</span>}
         </div>
       </div>
 

@@ -99,6 +99,9 @@ class Gateway:
         self._nodes: NodeManager = NodeManager()
         # Heartbeat monitor (set in start())
         self._heartbeat_monitor: Optional[HeartbeatMonitor] = None
+        # Shared cross-channel message history (ring buffer, max 200 entries)
+        self._message_history: list[dict] = []
+        self._message_history_max: int = 200
 
     def register_adapter(self, adapter: Any) -> None:
         """Register a channel adapter (must expose start/stop/send)."""
@@ -164,9 +167,28 @@ class Gateway:
     # Public ingestion / dispatch
     # ------------------------------------------------------------------
 
+    def _append_history(self, role: str, text: str, channel: str, session_id: str) -> None:
+        """Append a message to the shared cross-channel history ring buffer."""
+        entry = {
+            "id":         f"{session_id}-{int(time.time()*1000)}-{len(self._message_history)}",
+            "role":       role,
+            "text":       text,
+            "channel":    channel,
+            "session_id": session_id,
+            "timestamp":  int(time.time() * 1000),
+        }
+        self._message_history.append(entry)
+        if len(self._message_history) > self._message_history_max:
+            self._message_history = self._message_history[-self._message_history_max:]
+
+    def get_message_history(self, since_ts: int = 0) -> list[dict]:
+        """Return history entries newer than since_ts (ms epoch)."""
+        return [m for m in self._message_history if m["timestamp"] > since_ts]
+
     async def ingest(self, session_id: str, message: str, channel: str,
                      agent_id: str = "") -> None:
         """Called by adapters when a user message arrives. Routes to lane queue."""
+        self._append_history("user", message, channel, session_id)
         lane = self._get_or_create_lane(session_id)
         await lane.enqueue({
             "session_id": session_id,
@@ -177,6 +199,7 @@ class Gateway:
 
     async def send(self, session_id: str, text: str, channel: str) -> None:
         """Called by agent loop to deliver a response to the originating channel."""
+        self._append_history("assistant", text, channel, session_id)
         if channel in ("web", "cron", "heartbeat"):
             await self._ws_broadcast({
                 "type": "response", "session_id": session_id,

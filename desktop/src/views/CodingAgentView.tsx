@@ -23,10 +23,11 @@ interface RecentTask {
   createdAt: number;
 }
 
-const ALL_MODELS = ["codex", "cursor", "gemini"] as const;
+const ALL_MODELS = ["codex", "cursor", "claude", "gemini"] as const;
 const MODEL_CONFIG: Record<string, { label: string; color: string }> = {
   codex:  { label: "Codex",   color: "#F59E0B" },
   cursor: { label: "Cursor",  color: "#22D3EE" },
+  claude: { label: "Claude",  color: "#3B82F6" },
   gemini: { label: "Gemini",  color: "#A855F7" },
 };
 const MAX_RECENT_TASKS = 10;
@@ -173,7 +174,7 @@ export const CodingAgentView: React.FC<CodingAgentViewProps> = ({ wsBase, apiBas
           <div className="coding-entry-icon">C</div>
           <h1 className="coding-entry-title">Cato Coding Agent</h1>
           <p className="coding-entry-subtitle">
-            Submit a task to get responses from Codex, Cursor, and Gemini
+            Submit a task to Codex, Cursor, Claude, and Gemini
           </p>
           <TaskInput
             onTaskCreated={handleTaskCreated}
