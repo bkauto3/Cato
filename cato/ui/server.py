@@ -446,7 +446,10 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
         name = request.match_info.get("name", "")
         try:
             from cato.core.schedule_manager import toggle_schedule
-            body = await request.json()
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
             enabled = bool(body.get("enabled", True))
             ok = toggle_schedule(name, enabled)
             if ok:
