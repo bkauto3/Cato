@@ -22,7 +22,7 @@ from pathlib import Path
 PORT: int = int(os.environ.get("CATO_PORT", "8080"))
 HOST: str = os.environ.get("CATO_HOST", "127.0.0.1")
 POLL_INTERVAL: int = int(os.environ.get("CATO_WATCHDOG_INTERVAL", "30"))  # seconds
-STARTUP_GRACE: int = int(os.environ.get("CATO_WATCHDOG_GRACE", "8"))      # seconds after restart
+STARTUP_GRACE: int = int(os.environ.get("CATO_WATCHDOG_GRACE", "20"))     # seconds after restart (20s for Windows cold start)
 
 # Resolve cato data dir the same way the CLI does
 try:
@@ -87,26 +87,44 @@ def _clear_stale_pid() -> None:
 
 
 def _start_gateway() -> None:
-    """Launch `cato start` as a detached background process."""
+    """Launch the Cato daemon as a detached background process.
+
+    Uses cato_svc_runner.py (the proven VPS launch method) when it exists,
+    falling back to `cato start` otherwise.
+    """
     log.info("Starting cato gateway...")
-    cato_exe = "cato"
+
+    # Prefer the svc runner script — it handles vault password, path setup, PID file
+    _REPO = Path(__file__).resolve().parent.parent
+    svc_runner = _REPO / "cato_svc_runner.py"
+    python_exe = sys.executable
+
     try:
+        if svc_runner.exists():
+            cmd = [python_exe, str(svc_runner)]
+            log.info("Using svc runner: %s", " ".join(cmd))
+        else:
+            cmd = ["cato", "start"]
+            log.info("Using cato start (svc runner not found)")
+
         if sys.platform == "win32":
             subprocess.Popen(
-                [cato_exe, "start"],
+                cmd,
                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
                 close_fds=True,
+                cwd=str(_REPO),
             )
         else:
             subprocess.Popen(
-                [cato_exe, "start"],
+                cmd,
                 start_new_session=True,
                 close_fds=True,
+                cwd=str(_REPO),
             )
-        log.info("cato start launched — waiting %ss for startup...", STARTUP_GRACE)
+        log.info("Daemon launched — waiting %ss for startup...", STARTUP_GRACE)
         time.sleep(STARTUP_GRACE)
-    except FileNotFoundError:
-        log.error("'cato' not found on PATH — is the package installed?")
+    except FileNotFoundError as exc:
+        log.error("Launch failed — executable not found: %s", exc)
     except Exception as exc:
         log.error("Failed to start gateway: %s", exc)
 
