@@ -253,7 +253,7 @@ class Gateway:
         if channel in ("web", "cron", "heartbeat"):
             await self._ws_broadcast({
                 "type": "response", "session_id": session_id,
-                "text": clean_text, "cost_footer": self._budget.format_footer(),
+                "text": clean_text,
                 "channel": channel,
             })
             return
