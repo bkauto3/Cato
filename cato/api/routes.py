@@ -18,8 +18,10 @@ def register_all_routes(app: web.Application) -> None:
     from cato.api.websocket_handler import register_routes as register_coding_agent
     from cato.api.workspace_routes import register_routes as register_workspace
     from cato.api.logs_routes import register_routes as register_logs
+    from cato.api.memory_routes import register_routes as register_memory
 
     register_coding_agent(app)
     register_workspace(app)
     register_logs(app)
+    register_memory(app)
     logger.info("All API routes registered")
