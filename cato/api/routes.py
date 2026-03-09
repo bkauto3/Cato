@@ -17,7 +17,9 @@ def register_all_routes(app: web.Application) -> None:
     """Attach all API routes to the given aiohttp Application."""
     from cato.api.websocket_handler import register_routes as register_coding_agent
     from cato.api.workspace_routes import register_routes as register_workspace
+    from cato.api.logs_routes import register_routes as register_logs
 
     register_coding_agent(app)
     register_workspace(app)
+    register_logs(app)
     logger.info("All API routes registered")
