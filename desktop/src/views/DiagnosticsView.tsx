@@ -10,7 +10,7 @@ interface DiagnosticsViewProps {
   httpPort: number;
 }
 
-type TabId = "tiers" | "contradictions" | "decisions" | "anomalies" | "corrections";
+type TabId = "tiers" | "contradictions" | "decisions" | "anomalies" | "corrections" | "disagreements" | "epistemic" | "context" | "retrieval" | "habits";
 
 // ---------------------------------------------------------------------------
 // Query Tiers Tab
@@ -510,6 +510,259 @@ function CorrectionsTab({ httpPort }: { httpPort: number }) {
 }
 
 // ---------------------------------------------------------------------------
+// Disagreements Tab
+// ---------------------------------------------------------------------------
+
+function DisagreementsTab({ httpPort }: { httpPort: number }) {
+  const [data, setData] = useState<{ thresholds: Record<string, number>; info: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetched, setFetched] = useState(false);
+
+  const fetch_ = useCallback(async () => {
+    if (fetched) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`http://127.0.0.1:${httpPort}/api/diagnostics/disagreements`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData(await r.json());
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); setFetched(true); }
+  }, [fetched, httpPort]);
+  React.useEffect(() => { fetch_(); }, [fetch_]);
+
+  if (loading) return <p style={{ color: "var(--text-secondary, #aaa)" }}>Loading...</p>;
+  if (error) return <p style={{ color: "var(--error, #f87171)" }}>Error: {error}</p>;
+  if (!data) return null;
+
+  return (
+    <div>
+      <p style={{ color: "var(--text-secondary, #aaa)", fontSize: "0.85rem", marginBottom: "1rem" }}>{data.info}</p>
+      <h4 style={{ marginBottom: "0.5rem", fontSize: "0.9rem" }}>Disagreement Thresholds</h4>
+      <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+        {Object.entries(data.thresholds).map(([type, threshold]) => (
+          <div key={type} style={{ border: "1px solid #555", borderRadius: 8, padding: "0.75rem 1.25rem", minWidth: 140, textAlign: "center", background: "var(--surface, #1e1e2e)" }}>
+            <div style={{ fontWeight: 700, color: "#60a5fa", marginBottom: "0.3rem" }}>{type}</div>
+            <div style={{ fontSize: "1.5rem", fontWeight: 700 }}>{(threshold * 100).toFixed(0)}%</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Epistemic Tab
+// ---------------------------------------------------------------------------
+
+function EpistemicTab({ httpPort }: { httpPort: number }) {
+  const [data, setData] = useState<{ threshold: number; max_interrupts: number; premise_markers: string[]; info: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetched, setFetched] = useState(false);
+
+  const fetch_ = useCallback(async () => {
+    if (fetched) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`http://127.0.0.1:${httpPort}/api/diagnostics/epistemic`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData(await r.json());
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); setFetched(true); }
+  }, [fetched, httpPort]);
+  React.useEffect(() => { fetch_(); }, [fetch_]);
+
+  if (loading) return <p style={{ color: "var(--text-secondary, #aaa)" }}>Loading...</p>;
+  if (error) return <p style={{ color: "var(--error, #f87171)" }}>Error: {error}</p>;
+  if (!data) return null;
+
+  return (
+    <div>
+      <p style={{ color: "var(--text-secondary, #aaa)", fontSize: "0.85rem", marginBottom: "1rem" }}>{data.info}</p>
+      <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: "1.5rem" }}>
+        <div style={{ border: "1px solid #4ade80", borderRadius: 8, padding: "0.75rem 1.25rem", textAlign: "center", background: "var(--surface, #1e1e2e)" }}>
+          <div style={{ fontSize: "0.8rem", color: "var(--text-secondary, #aaa)" }}>Confidence Threshold</div>
+          <div style={{ fontSize: "1.5rem", fontWeight: 700, color: "#4ade80" }}>{(data.threshold * 100).toFixed(0)}%</div>
+        </div>
+        <div style={{ border: "1px solid #f59e0b", borderRadius: 8, padding: "0.75rem 1.25rem", textAlign: "center", background: "var(--surface, #1e1e2e)" }}>
+          <div style={{ fontSize: "0.8rem", color: "var(--text-secondary, #aaa)" }}>Max Interrupts</div>
+          <div style={{ fontSize: "1.5rem", fontWeight: 700, color: "#f59e0b" }}>{data.max_interrupts}</div>
+        </div>
+      </div>
+      <h4 style={{ marginBottom: "0.5rem", fontSize: "0.9rem" }}>Premise Markers</h4>
+      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        {data.premise_markers.map((m) => (
+          <code key={m} style={{ padding: "2px 8px", borderRadius: 4, background: "var(--surface, #2a2a3e)", fontSize: "0.8rem" }}>{m}</code>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Context Budget Tab
+// ---------------------------------------------------------------------------
+
+function ContextBudgetTab({ httpPort }: { httpPort: number }) {
+  const [data, setData] = useState<{ total: number; slots: Record<string, number>; info: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetched, setFetched] = useState(false);
+
+  const fetch_ = useCallback(async () => {
+    if (fetched) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`http://127.0.0.1:${httpPort}/api/diagnostics/context-budget`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData(await r.json());
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); setFetched(true); }
+  }, [fetched, httpPort]);
+  React.useEffect(() => { fetch_(); }, [fetch_]);
+
+  if (loading) return <p style={{ color: "var(--text-secondary, #aaa)" }}>Loading...</p>;
+  if (error) return <p style={{ color: "var(--error, #f87171)" }}>Error: {error}</p>;
+  if (!data) return null;
+
+  const SLOT_COLORS: Record<string, string> = {
+    tier0_identity: "#ef4444", tier0_agents: "#f59e0b",
+    tier1_skill: "#4ade80", tier1_memory: "#60a5fa",
+    tier1_tools: "#a78bfa", tier1_history: "#ec4899",
+    headroom: "#6b7280",
+  };
+
+  return (
+    <div>
+      <p style={{ color: "var(--text-secondary, #aaa)", fontSize: "0.85rem", marginBottom: "1rem" }}>{data.info}</p>
+      <div style={{ marginBottom: "1.5rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", marginBottom: "0.35rem" }}>
+          <span style={{ color: "var(--text-secondary, #aaa)" }}>Total Budget</span>
+          <span style={{ fontWeight: 600 }}>{data.total.toLocaleString()} tokens</span>
+        </div>
+        {/* Stacked bar */}
+        <div style={{ display: "flex", borderRadius: 6, overflow: "hidden", height: 24 }}>
+          {Object.entries(data.slots).map(([slot, tokens]) => (
+            <div key={slot} title={`${slot}: ${tokens} tokens`} style={{ width: `${(tokens / data.total) * 100}%`, background: SLOT_COLORS[slot] ?? "#555", minWidth: tokens > 0 ? 2 : 0 }} />
+          ))}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+        {Object.entries(data.slots).map(([slot, tokens]) => (
+          <div key={slot} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.8rem" }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: SLOT_COLORS[slot] ?? "#555", display: "inline-block" }} />
+            <span>{slot}: {tokens}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Retrieval Tab
+// ---------------------------------------------------------------------------
+
+function RetrievalTab({ httpPort }: { httpPort: number }) {
+  const [data, setData] = useState<{ strategy: string; components: string[]; info: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetched, setFetched] = useState(false);
+
+  const fetch_ = useCallback(async () => {
+    if (fetched) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`http://127.0.0.1:${httpPort}/api/diagnostics/retrieval`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData(await r.json());
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); setFetched(true); }
+  }, [fetched, httpPort]);
+  React.useEffect(() => { fetch_(); }, [fetch_]);
+
+  if (loading) return <p style={{ color: "var(--text-secondary, #aaa)" }}>Loading...</p>;
+  if (error) return <p style={{ color: "var(--error, #f87171)" }}>Error: {error}</p>;
+  if (!data) return null;
+
+  return (
+    <div>
+      <p style={{ color: "var(--text-secondary, #aaa)", fontSize: "0.85rem", marginBottom: "1rem" }}>{data.info}</p>
+      <div style={{ marginBottom: "1rem" }}>
+        <span style={{ fontSize: "0.85rem", color: "var(--text-secondary, #aaa)" }}>Strategy: </span>
+        <strong>{data.strategy}</strong>
+      </div>
+      <h4 style={{ marginBottom: "0.5rem", fontSize: "0.9rem" }}>Components</h4>
+      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+        {data.components.map((c) => (
+          <div key={c} style={{ border: "1px solid #4ade80", borderRadius: 8, padding: "0.5rem 1rem", background: "var(--surface, #1e1e2e)", fontSize: "0.85rem" }}>
+            {c}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Habits Tab
+// ---------------------------------------------------------------------------
+
+function HabitsTab({ httpPort }: { httpPort: number }) {
+  const [data, setData] = useState<{ patterns: Array<{ habit_id: string; habit_description: string; evidence_count: number; confidence: number; skill_affinity: string }>; count: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetched, setFetched] = useState(false);
+
+  const fetch_ = useCallback(async () => {
+    if (fetched) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`http://127.0.0.1:${httpPort}/api/diagnostics/habits`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setData(await r.json());
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); setFetched(true); }
+  }, [fetched, httpPort]);
+  React.useEffect(() => { fetch_(); }, [fetch_]);
+
+  if (loading) return <p style={{ color: "var(--text-secondary, #aaa)" }}>Loading...</p>;
+  if (error) return <p style={{ color: "var(--error, #f87171)" }}>Error: {error}</p>;
+  if (!data) return null;
+
+  return (
+    <div>
+      <h4 style={{ marginBottom: "0.5rem", fontSize: "0.9rem" }}>Inferred Habits ({data.count})</h4>
+      {data.patterns.length === 0 ? (
+        <p style={{ color: "var(--text-secondary, #aaa)", fontSize: "0.85rem" }}>No habits inferred yet. Patterns emerge after repeated interactions.</p>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--border, #333)" }}>
+              <th style={{ textAlign: "left", padding: "0.4rem 0.6rem" }}>Description</th>
+              <th style={{ textAlign: "right", padding: "0.4rem 0.6rem" }}>Evidence</th>
+              <th style={{ textAlign: "right", padding: "0.4rem 0.6rem" }}>Confidence</th>
+              <th style={{ textAlign: "left", padding: "0.4rem 0.6rem" }}>Skill</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.patterns.map((p) => (
+              <tr key={p.habit_id} style={{ borderBottom: "1px solid var(--border, #222)" }}>
+                <td style={{ padding: "0.4rem 0.6rem" }}>{p.habit_description}</td>
+                <td style={{ padding: "0.4rem 0.6rem", textAlign: "right" }}>{p.evidence_count}</td>
+                <td style={{ padding: "0.4rem 0.6rem", textAlign: "right", color: "#4ade80" }}>{(p.confidence * 100).toFixed(0)}%</td>
+                <td style={{ padding: "0.4rem 0.6rem", color: "var(--text-secondary, #aaa)" }}>{p.skill_affinity || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main DiagnosticsView
 // ---------------------------------------------------------------------------
 
@@ -519,6 +772,11 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "decisions",      label: "Decisions" },
   { id: "anomalies",      label: "Anomalies" },
   { id: "corrections",    label: "Corrections" },
+  { id: "disagreements",  label: "Disagreements" },
+  { id: "epistemic",      label: "Epistemic" },
+  { id: "context",        label: "Context Budget" },
+  { id: "retrieval",      label: "Retrieval" },
+  { id: "habits",         label: "Habits" },
 ];
 
 export function DiagnosticsView({ httpPort }: DiagnosticsViewProps) {
@@ -572,6 +830,11 @@ export function DiagnosticsView({ httpPort }: DiagnosticsViewProps) {
         {activeTab === "decisions"      && <DecisionsTab       httpPort={httpPort} />}
         {activeTab === "anomalies"      && <AnomaliesTab       httpPort={httpPort} />}
         {activeTab === "corrections"    && <CorrectionsTab     httpPort={httpPort} />}
+        {activeTab === "disagreements"  && <DisagreementsTab   httpPort={httpPort} />}
+        {activeTab === "epistemic"      && <EpistemicTab       httpPort={httpPort} />}
+        {activeTab === "context"        && <ContextBudgetTab   httpPort={httpPort} />}
+        {activeTab === "retrieval"      && <RetrievalTab       httpPort={httpPort} />}
+        {activeTab === "habits"         && <HabitsTab          httpPort={httpPort} />}
       </div>
     </div>
   );

@@ -56,8 +56,22 @@ _START_TIME     = time.monotonic()
 
 # Workspace identity files live here
 def _workspace_dir() -> Path:
+    """Return the workspace directory, preferring the value from config."""
+    try:
+        from cato.config import CatoConfig
+        cfg = CatoConfig.load()
+        ws = getattr(cfg, "workspace_dir", "") or ""
+        if ws:
+            p = Path(ws).expanduser().resolve()
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+    except Exception:
+        pass
+    # Fallback: ~/.cato/workspace (mirrors config default)
     from cato.platform import get_data_dir
-    return get_data_dir() / "default" / "workspace"
+    fallback = Path.home() / ".cato" / "workspace"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
 
 _WORKSPACE_ALLOWED = {"SOUL.md", "IDENTITY.md", "USER.md", "AGENTS.md", "TOOLS.md", "HEARTBEAT.md"}
 
@@ -72,13 +86,13 @@ async def cors_middleware(request: web.Request, handler):
             status=204,
             headers={
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type, Authorization",
             },
         )
     response = await handler(request)
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return response
 
@@ -102,11 +116,12 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
 
     async def health(request: web.Request) -> web.Response:
         """Return JSON health payload consumed by the UI health pill."""
+        from cato import __version__
         sessions = len(gateway._lanes) if gateway is not None else 0
         uptime   = int(time.monotonic() - _START_TIME)
         return web.json_response({
             "status":   "ok",
-            "version":  "0.1.0",
+            "version":  __version__,
             "sessions": sessions,
             "uptime":   uptime,
         })
@@ -389,18 +404,46 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
         def _check_tool(name: str, cmd: list) -> dict:
             exe = shutil.which(name)
             if exe is None:
-                return {"installed": False, "logged_in": False, "version": ""}
+                return {"installed": False, "logged_in": False, "version": "", "version_check_ok": False}
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
                 version = (proc.stdout or proc.stderr or "").strip().split("\n")[0][:60]
-                return {"installed": True, "logged_in": True, "version": version}
+                return {"installed": True, "logged_in": True, "version": version, "version_check_ok": True}
+            except subprocess.TimeoutExpired:
+                # Version check timed out — CLI is installed but we can't confirm auth
+                return {"installed": True, "logged_in": False, "version": "", "version_check_ok": False}
             except Exception:
-                return {"installed": True, "logged_in": False, "version": ""}
+                return {"installed": True, "logged_in": False, "version": "", "version_check_ok": False}
 
         for tool_name, cmd in TOOLS.items():
             result[tool_name] = await loop.run_in_executor(None, _check_tool, tool_name, cmd)
 
         return web.json_response(result)
+
+    async def cli_restart(request: web.Request) -> web.Response:
+        """POST /api/cli/{name}/restart — restart a specific CLI backend."""
+        name = request.match_info.get("name", "")
+        valid_names = {"claude", "codex", "gemini", "cursor"}
+        if name not in valid_names:
+            return web.json_response(
+                {"status": "error", "message": f"Unknown CLI backend: {name}"},
+                status=404,
+            )
+        # Attempt to restart via the process pool if available
+        try:
+            if gateway is not None and hasattr(gateway, "_pool"):
+                pool = gateway._pool
+                if hasattr(pool, "restart"):
+                    await pool.restart(name)
+                elif hasattr(pool, "warm_up"):
+                    await pool.warm_up(name)
+            return web.json_response({"status": "ok", "message": f"{name} restart initiated"})
+        except Exception as exc:
+            logger.error("cli_restart error for %s: %s", name, exc)
+            return web.json_response(
+                {"status": "error", "message": str(exc)},
+                status=500,
+            )
 
     # ------------------------------------------------------------------ #
     # Cron jobs                                                            #
@@ -735,7 +778,13 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
                     # file values take precedence over defaults
                     merged = {**defaults, **cfg}
                     cfg = merged
-            return web.json_response(cfg)
+            # Filter out sensitive keys before returning
+            _SENSITIVE_SUBSTRINGS = ("token", "password", "secret", "_key", "api_key")
+            filtered = {
+                k: v for k, v in cfg.items()
+                if not any(s in k.lower() for s in _SENSITIVE_SUBSTRINGS)
+            }
+            return web.json_response(filtered)
         except Exception as exc:
             logger.error("get_config error: %s", exc)
             return web.json_response({}, status=500)
@@ -1068,6 +1117,183 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
         except Exception as exc:
             logger.error("diagnostics_skill_corrections error: %s", exc)
             return web.json_response({"corrections": [], "error": str(exc)}, status=200)
+
+    # ------------------------------------------------------------------ #
+    # Delegation Tokens                                                    #
+    # ------------------------------------------------------------------ #
+
+    async def list_tokens(request: web.Request) -> web.Response:
+        """GET /api/tokens — list active delegation tokens."""
+        try:
+            import asyncio as _asyncio
+            from cato.auth.token_store import TokenStore
+            from cato.platform import get_data_dir
+            db_path = get_data_dir() / "default" / "tokens.db"
+            ts = TokenStore(db_path=db_path)
+            def _fetch():
+                try:
+                    from dataclasses import asdict
+                    tokens = ts.list_active()
+                    return [asdict(t) for t in tokens]
+                finally:
+                    ts._conn.close()
+            loop = _asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, _fetch)
+            return web.json_response(result)
+        except Exception as exc:
+            logger.error("list_tokens error: %s", exc)
+            return web.json_response([], status=200)
+
+    async def create_token(request: web.Request) -> web.Response:
+        """POST /api/tokens — create a new delegation token."""
+        try:
+            import asyncio as _asyncio
+            from cato.auth.token_store import TokenStore
+            from cato.platform import get_data_dir
+            body = await request.json()
+            db_path = get_data_dir() / "default" / "tokens.db"
+            ts = TokenStore(db_path=db_path)
+            def _create():
+                try:
+                    token = ts.create(
+                        allowed_action_categories=body.get("categories", []),
+                        spending_ceiling=body.get("spending_ceiling", 1.0),
+                        expires_in_seconds=body.get("expires_in_seconds", 3600),
+                    )
+                    return {"status": "ok", "token_id": token.token_id}
+                finally:
+                    ts._conn.close()
+            loop = _asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, _create)
+            return web.json_response(result)
+        except Exception as exc:
+            logger.error("create_token error: %s", exc)
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
+    async def revoke_token(request: web.Request) -> web.Response:
+        """DELETE /api/tokens/{token_id} — revoke a delegation token."""
+        try:
+            import asyncio as _asyncio
+            from cato.auth.token_store import TokenStore
+            from cato.platform import get_data_dir
+            token_id = request.match_info.get("token_id", "")
+            db_path = get_data_dir() / "default" / "tokens.db"
+            ts = TokenStore(db_path=db_path)
+            def _revoke():
+                try:
+                    ok = ts.revoke(token_id, reason="Revoked via UI")
+                    return {"status": "ok" if ok else "not_found"}
+                finally:
+                    ts._conn.close()
+            loop = _asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, _revoke)
+            return web.json_response(result)
+        except Exception as exc:
+            logger.error("revoke_token error: %s", exc)
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
+    # ------------------------------------------------------------------ #
+    # Config reload                                                        #
+    # ------------------------------------------------------------------ #
+
+    async def reload_config(request: web.Request) -> web.Response:
+        """POST /api/config/reload — reload config from disk without daemon restart."""
+        try:
+            from cato.config import CatoConfig
+            cfg = CatoConfig.load()
+            if gateway is not None and hasattr(gateway, "_cfg"):
+                # Update the gateway's in-memory config
+                for f in cfg.__dataclass_fields__:
+                    if hasattr(gateway._cfg, f):
+                        setattr(gateway._cfg, f, getattr(cfg, f))
+            return web.json_response({"status": "ok", "message": "Config reloaded from disk"})
+        except Exception as exc:
+            logger.error("reload_config error: %s", exc)
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
+    async def diagnostics_disagreements(request: web.Request) -> web.Response:
+        """GET /api/diagnostics/disagreements — disagreement surfacer config & thresholds."""
+        try:
+            from cato.orchestrator.disagreement_surfacer import DisagreementSurfacer
+            ds = DisagreementSurfacer()
+            return web.json_response({
+                "thresholds": ds.THRESHOLDS,
+                "info": "Disagreement surfacer monitors multi-model output divergence using Jaccard distance + confidence stdev.",
+            })
+        except Exception as exc:
+            logger.error("diagnostics_disagreements error: %s", exc)
+            return web.json_response({"thresholds": {}, "error": str(exc)}, status=200)
+
+    async def diagnostics_epistemic(request: web.Request) -> web.Response:
+        """GET /api/diagnostics/epistemic — epistemic monitor state."""
+        try:
+            from cato.orchestrator.epistemic_monitor import EpistemicMonitor
+            em = EpistemicMonitor()
+            return web.json_response({
+                "threshold": em.threshold,
+                "max_interrupts": em.max_interrupts,
+                "premise_markers": em.PREMISE_MARKERS,
+                "info": "Epistemic monitor extracts premises and detects confidence gaps in reasoning.",
+            })
+        except Exception as exc:
+            logger.error("diagnostics_epistemic error: %s", exc)
+            return web.json_response({"threshold": 0.7, "max_interrupts": 3, "premise_markers": [], "error": str(exc)}, status=200)
+
+    async def diagnostics_context_budget(request: web.Request) -> web.Response:
+        """GET /api/diagnostics/context-budget — context builder slot budget info."""
+        try:
+            from cato.core.context_builder import SlotBudget
+            sb = SlotBudget()
+            return web.json_response({
+                "total": sb.total,
+                "slots": {
+                    "tier0_identity": sb.tier0_identity,
+                    "tier0_agents": sb.tier0_agents,
+                    "tier1_skill": sb.tier1_skill,
+                    "tier1_memory": sb.tier1_memory,
+                    "tier1_tools": sb.tier1_tools,
+                    "tier1_history": sb.tier1_history,
+                    "headroom": sb.headroom,
+                },
+                "info": "Context budget allocates token slots by priority tier (0=critical identity, 1=active context).",
+            })
+        except Exception as exc:
+            logger.error("diagnostics_context_budget error: %s", exc)
+            return web.json_response({"total": 12000, "slots": {}, "error": str(exc)}, status=200)
+
+    async def diagnostics_retrieval(request: web.Request) -> web.Response:
+        """GET /api/diagnostics/retrieval — retrieval system info."""
+        try:
+            return web.json_response({
+                "strategy": "hybrid",
+                "components": ["keyword_search", "knowledge_graph", "fact_store"],
+                "info": "HybridRetriever combines keyword search, knowledge graph traversal, and fact store lookups.",
+            })
+        except Exception as exc:
+            logger.error("diagnostics_retrieval error: %s", exc)
+            return web.json_response({"strategy": "unknown", "components": [], "error": str(exc)}, status=200)
+
+    async def diagnostics_habits(request: web.Request) -> web.Response:
+        """GET /api/diagnostics/habits — habit extractor patterns."""
+        try:
+            import asyncio as _asyncio
+            from dataclasses import asdict
+            from cato.personalization.habit_extractor import HabitExtractor
+            from cato.platform import get_data_dir
+            db_path = get_data_dir() / "cato.db"
+            he = HabitExtractor(db_path=db_path)
+            def _fetch():
+                try:
+                    patterns = he.extract_patterns()
+                    return {"patterns": [asdict(p) for p in patterns], "count": len(patterns)}
+                except Exception:
+                    return {"patterns": [], "count": 0}
+            loop = _asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, _fetch)
+            return web.json_response(result)
+        except Exception as exc:
+            logger.error("diagnostics_habits error: %s", exc)
+            return web.json_response({"patterns": [], "count": 0, "error": str(exc)}, status=200)
 
     # ------------------------------------------------------------------ #
     # Favicon                                                              #
@@ -1527,8 +1753,22 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
             logger.error("post_heartbeat error: %s", exc)
             return web.json_response({"status": "error", "message": str(exc)}, status=500)
 
+    def _system_metrics() -> dict:
+        """Collect system metrics (CPU, memory, disk) via psutil if available."""
+        try:
+            import psutil
+            return {
+                "cpu_percent": psutil.cpu_percent(interval=0.1),
+                "memory_percent": psutil.virtual_memory().percent,
+                "disk_percent": psutil.disk_usage("/").percent,
+            }
+        except ImportError:
+            return {"cpu_percent": None, "memory_percent": None, "disk_percent": None}
+        except Exception:
+            return {"cpu_percent": None, "memory_percent": None, "disk_percent": None}
+
     async def get_heartbeat(request: web.Request) -> web.Response:
-        """GET /api/heartbeat — return HeartbeatMonitor state."""
+        """GET /api/heartbeat — return HeartbeatMonitor state + system metrics."""
         try:
             import datetime as _dt
 
@@ -1542,6 +1782,7 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
                     "agent_name": None,
                     "uptime_seconds": None,
                     "status": "unknown",
+                    **_system_metrics(),
                 })
 
             # HeartbeatMonitor tracks _last_fire per agent name
@@ -1558,12 +1799,14 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
                         "agent_name": _heartbeat_state.get("agent_name", "Cato"),
                         "uptime_seconds": _heartbeat_state.get("uptime_seconds", 0),
                         "status": "alive" if elapsed2 < 600 else "stale",
+                        **_system_metrics(),
                     })
                 return web.json_response({
                     "last_heartbeat": None,
                     "agent_name": None,
                     "uptime_seconds": None,
                     "status": "unknown",
+                    **_system_metrics(),
                 })
 
             # Use the most recently fired agent
@@ -1587,6 +1830,7 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
                 "agent_name": agent_name,
                 "uptime_seconds": round(uptime_seconds, 1),
                 "status": status,
+                **_system_metrics(),
             })
         except Exception as exc:
             logger.error("get_heartbeat error: %s", exc)
@@ -1631,6 +1875,7 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
     app.router.add_post("/api/skills/{name}/toggle",          toggle_skill)
     # CLI status
     app.router.add_get("/api/cli/status",                     cli_status)
+    app.router.add_post("/api/cli/{name}/restart",               cli_restart)
     # Cron
     app.router.add_get("/api/cron/jobs",                     list_cron_jobs)
     app.router.add_post("/api/cron/jobs",                    create_cron_job)
@@ -1652,6 +1897,7 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
     app.router.add_get("/api/config",                    get_config)
     app.router.add_route("PATCH", "/api/config",         patch_config)
     # Memory
+    app.router.add_post("/api/config/reload",             reload_config)
     app.router.add_get("/api/memory/files",              memory_files)
     app.router.add_get("/api/memory/content",            memory_content)
     app.router.add_route("PATCH", "/api/memory/content", patch_memory_content)
@@ -1679,8 +1925,17 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
     app.router.add_get("/api/diagnostics/decision-memory",       diagnostics_decision_memory)
     app.router.add_get("/api/diagnostics/anomaly-domains",       diagnostics_anomaly_domains)
     app.router.add_get("/api/diagnostics/skill-corrections",     diagnostics_skill_corrections)
+    app.router.add_get("/api/diagnostics/disagreements",         diagnostics_disagreements)
+    app.router.add_get("/api/diagnostics/epistemic",             diagnostics_epistemic)
+    app.router.add_get("/api/diagnostics/context-budget",        diagnostics_context_budget)
+    app.router.add_get("/api/diagnostics/retrieval",             diagnostics_retrieval)
+    app.router.add_get("/api/diagnostics/habits",                diagnostics_habits)
     # Adapters
     app.router.add_get("/api/adapters",                 list_adapters)
+
+    app.router.add_get("/api/tokens",                    list_tokens)
+    app.router.add_post("/api/tokens",                   create_token)
+    app.router.add_delete("/api/tokens/{token_id}",      revoke_token)
     # Heartbeat
     app.router.add_get("/api/heartbeat",                get_heartbeat)
     # BUG FIX HB-001: POST endpoint for gateway heartbeat poster

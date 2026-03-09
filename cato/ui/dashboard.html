@@ -327,7 +327,10 @@ textarea.form-input{resize:vertical;min-height:80px}
 <div id="onboarding-overlay" style="display:none">
   <div class="wizard-card">
     <div id="wiz-step-1" class="wizard-step active">
-      <div class="wizard-title">Welcome to Cato</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div class="wizard-title">Welcome to Cato</div>
+        <button onclick="dismissOnboarding()" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;padding:0 4px" title="Skip setup">&times;</button>
+      </div>
       <div class="wizard-subtitle">Let's get you set up in under a minute.</div>
       <div class="wizard-progress" id="wiz-progress"></div>
       <div class="form-group">
@@ -444,6 +447,7 @@ textarea.form-input{resize:vertical;min-height:80px}
         <div class="nav-item" data-page="sessions" onclick="navigate('sessions')"><span class="nav-item-icon">&#128203;</span>Sessions</div>
         <!-- BUG FIX FLOW-003: Flows nav item -->
         <div class="nav-item" data-page="flows" onclick="navigate('flows')"><span class="nav-item-icon">&#9654;</span>Flows</div>
+        <a class="nav-item" href="/coding-agent" target="_blank" style="text-decoration:none;color:inherit"><span class="nav-item-icon">&#128187;</span>Coding Agent</a>
       </div>
 
       <div class="nav-group-header" onclick="toggleGroup('monitoring')">
@@ -484,7 +488,7 @@ textarea.form-input{resize:vertical;min-height:80px}
     </div>
 
     <div class="sidebar-footer">
-      <span class="version-badge">v0.1.0</span>
+      <span class="version-badge" id="version-badge">v0.2.0</span>
       <div id="audit-integrity-footer" class="audit-integrity-badge" title="Audit chain integrity">
         <div class="audit-integrity-dot" id="audit-integrity-dot"></div>
         <span id="audit-integrity-label" style="color:#4b5563">Audit chain</span>
@@ -619,6 +623,15 @@ textarea.form-input{resize:vertical;min-height:80px}
             <tbody id="sessions-tbody"></tbody>
           </table>
         </div>
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">Session Checkpoints</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px">Click a session above or enter a session ID to browse its checkpoints.</div>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input class="form-input" id="checkpoint-session-id" placeholder="Session ID..." style="flex:1">
+            <button class="btn btn-secondary btn-sm" onclick="loadCheckpoints()">Load</button>
+          </div>
+          <div id="checkpoint-list"><div style="color:#4b5563;font-size:12px">No session selected.</div></div>
+        </div>
       </div>
 
       <!-- Audit Log (CHUNK 7) -->
@@ -729,6 +742,7 @@ textarea.form-input{resize:vertical;min-height:80px}
             <button id="cfg-raw-btn" onclick="switchConfig('raw')">Raw JSON</button>
           </div>
           <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" onclick="reloadConfigFromDisk()">Reload from Disk</button>
             <button class="btn btn-secondary btn-sm" onclick="saveConfig()">Save Changes</button>
             <button class="btn btn-primary btn-sm" onclick="saveAndRestartDaemon()">Apply &amp; Restart</button>
           </div>
@@ -933,6 +947,7 @@ textarea.form-input{resize:vertical;min-height:80px}
         <div class="card">
           <div class="card-title">CLI Auth Status</div>
           <div id="cli-status-list"><div style="color:#4b5563;font-size:13px;text-align:center;padding:24px">Loading CLI status...</div></div>
+          <button onclick="loadCliStatus()" style="margin-top:10px;padding:6px 14px;font-size:12px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:6px;cursor:pointer">Re-check</button>
         </div>
         <div class="card">
           <div class="card-title">SwarmSync</div>
@@ -994,6 +1009,48 @@ textarea.form-input{resize:vertical;min-height:80px}
           <div style="font-size:12px;color:#64748b;margin-bottom:12px">Decisions tracked by the decision memory system that are still open (no recorded outcome).</div>
           <div id="diag-decision-memory"><div style="color:#4b5563;font-size:12px">Loading...</div></div>
           <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadDecisionMemory()">Refresh</button>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">Anomaly Detection</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px">Domain-level anomaly detection — flags unusual predictions and disagreements.</div>
+          <div id="diag-anomalies"><div style="color:#4b5563;font-size:12px">Loading...</div></div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadDiagAnomalies()">Refresh</button>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">Skill Corrections</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px">Correction history from user feedback — used for skill improvement cycles.</div>
+          <div id="diag-corrections"><div style="color:#4b5563;font-size:12px">Loading...</div></div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadDiagCorrections()">Refresh</button>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">Disagreements</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px">Multi-model Jaccard disagreement surfacing thresholds and configuration.</div>
+          <div id="diag-disagreements"><div style="color:#4b5563;font-size:12px">Loading...</div></div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadDiagDisagreements()">Refresh</button>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">Epistemic Monitor</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px">Premise extraction and gap detection configuration.</div>
+          <div id="diag-epistemic"><div style="color:#4b5563;font-size:12px">Loading...</div></div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadDiagEpistemic()">Refresh</button>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">Context Budget</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px">SlotBudget allocation across tiers — identity, agents, skill, memory, tools, history.</div>
+          <div id="diag-context-budget"><div style="color:#4b5563;font-size:12px">Loading...</div></div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadDiagContextBudget()">Refresh</button>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">Retrieval</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px">HybridRetriever info — embedding model and configuration.</div>
+          <div id="diag-retrieval"><div style="color:#4b5563;font-size:12px">Loading...</div></div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadDiagRetrieval()">Refresh</button>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="card-title">Habit Patterns</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px">Inferred user habit patterns from repeated interactions.</div>
+          <div id="diag-habits"><div style="color:#4b5563;font-size:12px">Loading...</div></div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadDiagHabits()">Refresh</button>
         </div>
       </div>
 
@@ -1230,7 +1287,7 @@ function handleWsMessage(data) {
       // Final complete response — stop streaming if active, render full
       stopStreaming(data.session_id);
       hideTyping(data.session_id);
-      addMessage(data.session_id, 'assistant', data.text, data.cost_footer, data.usage, data.routed_to);
+      addMessage(data.session_id, 'assistant', data.text, data.cost_footer, data.usage, data.routed_to, data.model);
       break;
     case 'chunk':
       // CHUNK 1: incremental streaming token
@@ -1294,6 +1351,10 @@ function setHealth(online, data) {
     dot.classList.remove('online'); lbl.textContent = 'Offline';
     pill.classList.remove('online');
   }
+  if (data && data.version) {
+    const vb = document.getElementById('version-badge');
+    if (vb) vb.textContent = 'v' + data.version;
+  }
   updateChatReadonlyState();
 }
 
@@ -1341,7 +1402,7 @@ function onPageEnter(page) {
   if (page === 'alerts')   renderAlerts();
   if (page === 'vault')    renderVaultPage();
   if (page === 'system')   { loadSystemCliPool(); loadSystemActionGuard(); }
-  if (page === 'diagnostics') { loadQueryTiers(); loadContradictionHealth(); loadDecisionMemory(); }
+  if (page === 'diagnostics') { loadQueryTiers(); loadContradictionHealth(); loadDecisionMemory(); loadDiagAnomalies(); loadDiagCorrections(); loadDiagDisagreements(); loadDiagEpistemic(); loadDiagContextBudget(); loadDiagRetrieval(); loadDiagHabits(); }
   if (page === 'flows')      loadFlows();
   if (page === 'nodes')      loadNodes();
   if (page === 'identity')   loadIdentityFile('SOUL.md');
@@ -1422,6 +1483,20 @@ function renderMessages(sessionId) {
     const isUser = m.role === 'user';
     let extra = '';
     if (!isUser) {
+      if (m.model) {
+        const modelColors = {
+          'claude': '#9B5DE5',
+          'codex': '#00D9FF',
+          'gemini': '#F77F00',
+          'cursor': '#06FFA5',
+          'swarmsync': '#FF006E',
+        };
+        const modelLower = (m.model || '').toLowerCase();
+        const color = Object.keys(modelColors).find(k => modelLower.includes(k))
+          ? modelColors[Object.keys(modelColors).find(k => modelLower.includes(k))]
+          : '#64748B';
+        extra += `<div class="model-badge" style="display:inline-block;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:600;background:${color}22;color:${color};border:1px solid ${color}55;margin-top:6px">${(m.model || 'unknown').toUpperCase()}</div>`;
+      }
       if (m.routedTo) extra += `<div class="routed-to">Routed to: ${esc(m.routedTo)}</div>`;
       if (m.usage) {
         const u = m.usage;
@@ -1429,20 +1504,28 @@ function renderMessages(sessionId) {
       }
     }
     return `<div class="msg-row${isUser ? ' user' : ''}">
-      <div class="msg-avatar ${isUser ? 'user-av' : 'bot-av'}">${isUser ? 'U' : 'AI'}</div>
+      <div class="msg-avatar ${isUser ? 'user-av' : 'bot-av'}">${isUser ? 'U' : 'C'}</div>
       <div class="msg-bubble">
         <div class="msg-text">${esc(m.text)}</div>
         ${m.footer ? `<div class="msg-footer">${esc(m.footer)}</div>` : ''}
         ${extra}
       </div>
     </div>`;
-  }).join('') + '<div id="typing-indicator" style="display:none" class="msg-row"><div class="msg-avatar bot-av">AI</div><div class="msg-bubble"><div class="typing-dots"><span>&#8226;</span><span>&#8226;</span><span>&#8226;</span></div></div></div>';
+  }).join('') + '<div id="typing-indicator" style="display:none" class="msg-row"><div class="msg-avatar bot-av">C</div><div class="msg-bubble"><div class="typing-dots"><span>&#8226;</span><span>&#8226;</span><span>&#8226;</span></div></div></div>';
   wrap.scrollTop = wrap.scrollHeight;
 }
 
-function addMessage(sessionId, role, text, footer, usage, routedTo) {
+function addMessage(sessionId, role, text, footer, usage, routedTo, model) {
   if (!state.sessions[sessionId]) state.sessions[sessionId] = { messages: [], lastActivity: Date.now() };
-  state.sessions[sessionId].messages.push({ role, text, footer, usage: usage || null, routedTo: routedTo || null });
+  // Dedup: skip if the most-recent message for this session has the same role
+  // and identical text (prevents double-render when WS and a reconnect both
+  // deliver the same assistant turn).
+  const msgs = state.sessions[sessionId].messages;
+  if (msgs.length > 0) {
+    const last = msgs[msgs.length - 1];
+    if (last.role === role && last.text === text) return;
+  }
+  msgs.push({ role, text, footer, usage: usage || null, routedTo: routedTo || null, model: model || null });
   state.sessions[sessionId].lastActivity = Date.now();
   if (state.currentSession === sessionId) renderMessages(sessionId);
   renderSessions();
@@ -1539,6 +1622,8 @@ function startStreaming(sessionId) {
   state.streaming = true;
   state.streamingSession = sessionId;
   hideTyping(sessionId);
+  const sendBtn = document.getElementById('send-btn');
+  if (sendBtn) { sendBtn.textContent = 'Working...'; sendBtn.disabled = true; }
   // Create a new empty assistant bubble in the message area
   const wrap = document.getElementById('chat-messages');
   if (!wrap) return;
@@ -1546,7 +1631,7 @@ function startStreaming(sessionId) {
   state.streamingMsgId = id;
   const row = document.createElement('div');
   row.className = 'msg-row';
-  row.innerHTML = `<div class="msg-avatar bot-av">AI</div>
+  row.innerHTML = `<div class="msg-avatar bot-av">C</div>
     <div class="msg-bubble msg-streaming" id="${id}">
       <div class="msg-text" id="${id}-text"></div>
     </div>`;
@@ -1587,6 +1672,9 @@ function stopStreaming(sessionId) {
   // Hide abort button
   const abortBtn = document.getElementById('abort-btn');
   if (abortBtn) abortBtn.style.display = 'none';
+  // Restore send button
+  const sendBtn = document.getElementById('send-btn');
+  if (sendBtn) { sendBtn.textContent = 'Send'; sendBtn.disabled = !state.wsReady; }
 }
 
 function abortStreaming() {
@@ -2041,6 +2129,7 @@ async function refreshSessionsPage() {
       <td>${running}</td>
       <td>
         <div style="display:flex;gap:4px">
+          <button class="btn btn-secondary btn-sm" onclick="browseCheckpoints('${esc(id)}')">Checkpoints</button>
           <button class="btn btn-secondary btn-sm" onclick="downloadTranscript('${esc(id)}')">&#8595; Transcript</button>
           <button class="btn btn-danger btn-sm" onclick="killSessionFromPage('${esc(id)}')">Kill</button>
         </div>
@@ -2066,6 +2155,43 @@ function downloadTranscript(sessionId) {
   const a = document.createElement('a');
   a.href = url; a.download = 'audit-' + sessionId + '.jsonl';
   a.click();
+}
+
+function browseCheckpoints(sessionId) {
+  const inp = document.getElementById('checkpoint-session-id');
+  if (inp) inp.value = sessionId;
+  loadCheckpoints();
+}
+
+async function loadCheckpoints() {
+  const inp = document.getElementById('checkpoint-session-id');
+  const el = document.getElementById('checkpoint-list');
+  if (!inp || !el) return;
+  const sid = inp.value.trim();
+  if (!sid) { el.innerHTML = '<div style="color:#4b5563;font-size:12px">Enter a session ID.</div>'; return; }
+  el.innerHTML = '<div style="color:#4b5563;font-size:12px">Loading checkpoints...</div>';
+  try {
+    const r = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/checkpoints');
+    if (!r.ok) throw new Error(r.status);
+    const cps = await r.json();
+    if (!Array.isArray(cps) || !cps.length) {
+      el.innerHTML = '<div style="color:#4b5563;font-size:12px">No checkpoints for this session.</div>';
+      return;
+    }
+    el.innerHTML = cps.map(cp => {
+      const ts = cp.timestamp ? new Date(cp.timestamp).toLocaleString() : '?';
+      return `<div class="notification">
+        <div class="notif-icon">&#128205;</div>
+        <div class="notif-body">
+          <div class="notif-msg">${esc(cp.task_description || cp.description || cp.checkpoint_id || '?')}</div>
+          <div class="notif-time">${ts}${cp.token_count ? ' &bull; ' + cp.token_count.toLocaleString() + ' tokens' : ''}</div>
+          ${cp.key_facts ? `<div style="font-size:11px;color:#64748b;margin-top:4px">${esc(String(cp.key_facts).slice(0, 200))}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  } catch (_) {
+    el.innerHTML = '<div style="color:#4b5563;font-size:12px">Checkpoint data unavailable.</div>';
+  }
 }
 
 function updateSessionsFromServer(sessions) {
@@ -2384,6 +2510,11 @@ async function loadCliStatus() {
       const installed = s.installed || false;
       const loggedIn  = s.logged_in || false;
       const version   = s.version   || '';
+      const versionOk = s.version_check_ok !== false;
+      let authBadge = '';
+      if (installed && loggedIn) authBadge = '<span class="badge badge-blue">Logged in</span>';
+      else if (installed && !versionOk) authBadge = '<span class="badge badge-yellow">Version check timed out</span>';
+      else if (installed) authBadge = '<span class="badge badge-yellow">Not logged in</span>';
       return `<div class="cli-status-row">
         <span class="cli-logo">${c.icon}</span>
         <div class="cli-info">
@@ -2391,7 +2522,7 @@ async function loadCliStatus() {
           <div class="cli-version">${esc(c.desc)}${version ? ' · v'+esc(version) : ''}</div>
           <div class="cli-badges">
             ${installed ? '<span class="badge badge-green">Installed</span>' : '<span class="badge badge-gray">Not found</span>'}
-            ${installed && loggedIn ? '<span class="badge badge-blue">Logged in</span>' : (installed ? '<span class="badge badge-yellow">Not logged in</span>' : '')}
+            ${authBadge}
           </div>
         </div>
       </div>`;
@@ -3106,6 +3237,14 @@ async function computeHash(str) {
   }
 }
 
+async function reloadConfigFromDisk() {
+  try {
+    const r = await fetch('/api/config/reload', { method: 'POST' });
+    if (r.ok) { showToast('Config reloaded from disk.'); renderConfig(); }
+    else showToast('Reload failed: ' + r.status, 'error');
+  } catch (_) { showToast('Reload failed — daemon offline.', 'error'); }
+}
+
 async function saveConfig() {
   const rawEl  = document.getElementById('cfg-raw-json');
   const isRaw  = document.getElementById('cfg-raw-view').style.display !== 'none';
@@ -3360,13 +3499,23 @@ async function loadDashHeartbeat() {
     if (!r.ok) throw new Error(r.status);
     const d = await r.json();
     const uptime = d.uptime_seconds != null ? formatUptime(d.uptime_seconds) : '—';
+    const lastHb = d.last_heartbeat ? new Date(d.last_heartbeat * 1000).toLocaleTimeString() : '—';
+    const cpu = d.cpu_percent != null ? d.cpu_percent.toFixed(1) + '%' : '—';
+    const mem = d.memory_percent != null ? d.memory_percent.toFixed(1) + '%' : '—';
+    const disk = d.disk_percent != null ? d.disk_percent.toFixed(1) + '%' : '—';
     el.innerHTML = `<div style="display:flex;flex-direction:column;gap:6px">
       <div style="display:flex;align-items:center;gap:8px">
         <span class="badge ${d.status === 'ok' ? 'badge-green' : 'badge-red'}">${esc(d.status || '?')}</span>
         <span style="font-size:12px;color:#94a3b8">${esc(d.agent_name || 'cato')}</span>
       </div>
       <div style="font-size:11px;color:#4b5563">Uptime: <span style="color:#94a3b8">${uptime}</span></div>
+      <div style="font-size:11px;color:#4b5563">Last heartbeat: <span style="color:#94a3b8">${lastHb}</span></div>
       ${d.version ? `<div style="font-size:11px;color:#4b5563">Version: <span style="color:#94a3b8">${esc(d.version)}</span></div>` : ''}
+      <div style="display:flex;gap:12px;margin-top:4px">
+        <div style="font-size:11px;color:#4b5563">CPU <span style="color:#94a3b8">${cpu}</span></div>
+        <div style="font-size:11px;color:#4b5563">Mem <span style="color:#94a3b8">${mem}</span></div>
+        <div style="font-size:11px;color:#4b5563">Disk <span style="color:#94a3b8">${disk}</span></div>
+      </div>
     </div>`;
   } catch (_) {
     el.innerHTML = '<div style="color:#4b5563;font-size:12px">Heartbeat unavailable — daemon offline.</div>';
@@ -3583,6 +3732,165 @@ async function loadDecisionMemory() {
     }).join('');
   } catch (_) {
     el.innerHTML = '<div style="color:#4b5563;font-size:12px">Decision memory unavailable.</div>';
+  }
+}
+
+async function loadDiagAnomalies() {
+  const el = document.getElementById('diag-anomalies');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#4b5563;font-size:12px">Loading...</div>';
+  try {
+    const r = await fetch('/api/diagnostics/anomaly-detector');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const domains = d.domains || d || [];
+    if (!Array.isArray(domains) || !domains.length) {
+      el.innerHTML = '<div style="color:#4b5563;font-size:12px">No anomaly domains registered yet.</div>';
+      return;
+    }
+    el.innerHTML = domains.map(dm => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #1e2433">
+      <span style="font-size:12px;color:#e2e8f0;flex:1">${esc(dm.domain || dm.name || '?')}</span>
+      <span class="badge ${dm.is_anomaly ? 'badge-red' : 'badge-green'}">${dm.is_anomaly ? 'Anomaly' : 'Normal'}</span>
+      <span style="font-size:11px;color:#64748b">score: ${dm.score != null ? dm.score.toFixed(3) : '—'}</span>
+    </div>`).join('');
+  } catch (_) {
+    el.innerHTML = '<div style="color:#4b5563;font-size:12px">Anomaly data unavailable.</div>';
+  }
+}
+
+async function loadDiagCorrections() {
+  const el = document.getElementById('diag-corrections');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#4b5563;font-size:12px">Loading...</div>';
+  try {
+    const r = await fetch('/api/diagnostics/corrections');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const items = d.corrections || d || [];
+    if (!Array.isArray(items) || !items.length) {
+      el.innerHTML = '<div style="color:#4b5563;font-size:12px">No corrections recorded yet.</div>';
+      return;
+    }
+    el.innerHTML = items.slice(0, 20).map(c => `<div class="notification">
+      <div class="notif-icon">&#128221;</div>
+      <div class="notif-body">
+        <div class="notif-msg">${esc(c.correction || c.text || '?')}</div>
+        <div class="notif-time">${esc(c.category || '')} &bull; ${esc(c.skill || '')}</div>
+      </div>
+    </div>`).join('');
+  } catch (_) {
+    el.innerHTML = '<div style="color:#4b5563;font-size:12px">Corrections data unavailable.</div>';
+  }
+}
+
+async function loadDiagDisagreements() {
+  const el = document.getElementById('diag-disagreements');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#4b5563;font-size:12px">Loading...</div>';
+  try {
+    const r = await fetch('/api/diagnostics/disagreements');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px">
+      ${Object.entries(d).map(([k,v]) => `<div class="budget-stat-card">
+        <div class="budget-stat-label">${esc(k)}</div>
+        <div class="budget-stat-value" style="font-size:14px">${typeof v === 'number' ? v.toFixed(3) : esc(String(v))}</div>
+      </div>`).join('')}
+    </div>`;
+  } catch (_) {
+    el.innerHTML = '<div style="color:#4b5563;font-size:12px">Disagreements data unavailable.</div>';
+  }
+}
+
+async function loadDiagEpistemic() {
+  const el = document.getElementById('diag-epistemic');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#4b5563;font-size:12px">Loading...</div>';
+  try {
+    const r = await fetch('/api/diagnostics/epistemic');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px">
+      ${Object.entries(d).map(([k,v]) => `<div class="budget-stat-card">
+        <div class="budget-stat-label">${esc(k)}</div>
+        <div class="budget-stat-value" style="font-size:14px">${Array.isArray(v) ? v.length + ' items' : typeof v === 'number' ? v : esc(String(v))}</div>
+      </div>`).join('')}
+    </div>`;
+  } catch (_) {
+    el.innerHTML = '<div style="color:#4b5563;font-size:12px">Epistemic data unavailable.</div>';
+  }
+}
+
+async function loadDiagContextBudget() {
+  const el = document.getElementById('diag-context-budget');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#4b5563;font-size:12px">Loading...</div>';
+  try {
+    const r = await fetch('/api/diagnostics/context-budget');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const colors = ['#3b82f6','#8b5cf6','#ec4899','#f97316','#22c55e','#06b6d4','#64748b'];
+    const slots = Object.entries(d).filter(([k]) => k !== 'total');
+    const total = d.total || slots.reduce((s,[,v]) => s + (typeof v === 'number' ? v : 0), 0) || 1;
+    el.innerHTML = `<div style="margin-bottom:12px;height:24px;border-radius:6px;overflow:hidden;display:flex;background:#1e2433">
+      ${slots.map(([k,v],i) => {
+        const pct = typeof v === 'number' ? (v / total * 100) : 0;
+        return pct > 0 ? `<div style="width:${pct}%;background:${colors[i%colors.length]};display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;overflow:hidden" title="${esc(k)}: ${v}">${pct > 8 ? esc(k) : ''}</div>` : '';
+      }).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
+      ${slots.map(([k,v],i) => `<div style="display:flex;align-items:center;gap:6px;font-size:11px">
+        <span style="width:10px;height:10px;border-radius:2px;background:${colors[i%colors.length]};flex-shrink:0"></span>
+        <span style="color:#94a3b8">${esc(k)}:</span>
+        <span style="color:#e2e8f0">${v}</span>
+      </div>`).join('')}
+    </div>`;
+  } catch (_) {
+    el.innerHTML = '<div style="color:#4b5563;font-size:12px">Context budget data unavailable.</div>';
+  }
+}
+
+async function loadDiagRetrieval() {
+  const el = document.getElementById('diag-retrieval');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#4b5563;font-size:12px">Loading...</div>';
+  try {
+    const r = await fetch('/api/diagnostics/retrieval');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px">
+      ${Object.entries(d).map(([k,v]) => `<div class="budget-stat-card">
+        <div class="budget-stat-label">${esc(k)}</div>
+        <div class="budget-stat-value" style="font-size:14px">${esc(String(v))}</div>
+      </div>`).join('')}
+    </div>`;
+  } catch (_) {
+    el.innerHTML = '<div style="color:#4b5563;font-size:12px">Retrieval data unavailable.</div>';
+  }
+}
+
+async function loadDiagHabits() {
+  const el = document.getElementById('diag-habits');
+  if (!el) return;
+  el.innerHTML = '<div style="color:#4b5563;font-size:12px">Loading...</div>';
+  try {
+    const r = await fetch('/api/diagnostics/habits');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const habits = d.patterns || d.habits || d || [];
+    if (!Array.isArray(habits) || !habits.length) {
+      el.innerHTML = '<div style="color:#4b5563;font-size:12px">No habit patterns inferred yet. Patterns emerge after repeated interactions.</div>';
+      return;
+    }
+    el.innerHTML = habits.map(h => `<div class="notification">
+      <div class="notif-icon">&#128161;</div>
+      <div class="notif-body">
+        <div class="notif-msg">${esc(h.pattern || h.description || h.name || '?')}</div>
+        <div class="notif-time">confidence: ${h.confidence != null ? (h.confidence * 100).toFixed(0) + '%' : '?'} &bull; ${esc(h.category || '')}</div>
+      </div>
+    </div>`).join('');
+  } catch (_) {
+    el.innerHTML = '<div style="color:#4b5563;font-size:12px">Habits data unavailable.</div>';
   }
 }
 

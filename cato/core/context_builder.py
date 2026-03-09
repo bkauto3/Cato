@@ -102,6 +102,27 @@ DEFAULT_SLOT_BUDGET = SlotBudget()
 # HOT/COLD section loader
 # ---------------------------------------------------------------------------
 
+def list_available_skills(skills_dir: Path) -> list[str]:
+    """
+    Scan *skills_dir* for all available skill directories (containing SKILL.md).
+    Return list of skill names in alphabetical order.
+
+    A valid skill is a directory containing a SKILL.md file.
+    Skips directories ending with .DISABLED.
+    """
+    skills = []
+    if not skills_dir.exists():
+        return skills
+
+    for item in sorted(skills_dir.iterdir()):
+        if item.is_dir() and not item.name.endswith(".DISABLED"):
+            skill_file = item / "SKILL.md"
+            if skill_file.exists():
+                skills.append(item.name)
+
+    return skills
+
+
 def load_hot_section(skill_path: Path, slot_ceiling: int = DEFAULT_SLOT_BUDGET.tier1_skill) -> str:
     """
     Load only the HOT section of a skill file.
@@ -233,6 +254,7 @@ class ContextBuilder:
         memory_chunks: Optional[list[str]] = None,
         daily_log_path: Optional[Path] = None,
         slot_budget: Optional[SlotBudget] = None,
+        skills_dir: Optional[Path] = None,
     ) -> str:
         """
         Assemble and return the system prompt string.
@@ -245,6 +267,7 @@ class ContextBuilder:
             memory_chunks: Pre-retrieved semantic memory chunks to append.
             daily_log_path: Path to today's daily log file (optional).
             slot_budget: Per-slot token ceilings.  Defaults to DEFAULT_SLOT_BUDGET.
+            skills_dir: Directory containing available skills. If provided, injects a list.
         """
         workspace_dir = workspace_dir.expanduser().resolve()
         memory_chunks = memory_chunks or []
@@ -259,6 +282,21 @@ class ContextBuilder:
 
         # Track tokens used per slot to enforce per-slot ceilings across files
         slot_used: dict[str, int] = {}
+
+        # ---- Available skills injection (before priority stack) -----
+        if skills_dir:
+            available = list_available_skills(Path(skills_dir).expanduser().resolve())
+            if available:
+                skills_list = "# Available Skills\n\nYou have access to the following skills:\n\n" + \
+                             "\n".join(f"- {s}" for s in available)
+                tok = self.count_tokens(skills_list)
+                if tok <= remaining:
+                    sections.append(self._wrap("AVAILABLE_SKILLS", skills_list))
+                    used_tokens += tok
+                    remaining -= tok
+                    logger.debug("Included available skills list: %d tokens (%d skills)", tok, len(available))
+                else:
+                    logger.debug("Skipped skills list: %d tokens, only %d remaining", tok, remaining)
 
         # ---- Priority stack: static files --------------------------------
         for filename, must_full in _PRIORITY_STACK:

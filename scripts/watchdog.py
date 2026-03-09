@@ -32,6 +32,7 @@ except Exception:
     _CATO_DIR = Path(os.environ.get("APPDATA", Path.home())) / "cato"
 
 PID_FILE: Path = _CATO_DIR / "cato.pid"
+PORT_FILE: Path = _CATO_DIR / "cato.port"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -51,10 +52,29 @@ log = logging.getLogger("cato.watchdog")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _gateway_alive() -> bool:
-    """Return True if the gateway is accepting TCP connections on HOST:PORT."""
+def _effective_port() -> int:
+    """Return the port the daemon actually bound to.
+
+    Reads cato.port (written by the daemon at startup) when available,
+    falling back to the configured PORT constant.  This ensures the watchdog
+    checks the right port even when the daemon fell back to an alternate port.
+    """
     try:
-        with socket.create_connection((HOST, PORT), timeout=3):
+        if PORT_FILE.exists():
+            p = int(PORT_FILE.read_text().strip())
+            if p != PORT:
+                log.debug("Reading actual port from %s: %d (configured: %d)", PORT_FILE, p, PORT)
+            return p
+    except (ValueError, OSError):
+        pass
+    return PORT
+
+
+def _gateway_alive() -> bool:
+    """Return True if the gateway is accepting TCP connections on HOST:effective_port."""
+    check_port = _effective_port()
+    try:
+        with socket.create_connection((HOST, check_port), timeout=3):
             return True
     except OSError:
         return False
@@ -69,7 +89,37 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _kill_process(pid: int) -> None:
+    """Terminate a process by PID, escalating to SIGKILL on Unix if needed."""
+    import signal as _signal
+    try:
+        if sys.platform == "win32":
+            import subprocess as _sp
+            _sp.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                capture_output=True,
+                timeout=10,
+            )
+            log.info("Killed stale process PID %s via taskkill", pid)
+        else:
+            os.kill(pid, _signal.SIGTERM)
+            # Give the process a moment to exit cleanly before SIGKILL
+            for _ in range(5):
+                time.sleep(1)
+                if not _pid_alive(pid):
+                    break
+            else:
+                os.kill(pid, _signal.SIGKILL)
+            log.info("Killed stale process PID %s", pid)
+    except OSError as exc:
+        log.warning("Could not kill PID %s: %s", pid, exc)
+
+
 def _clear_stale_pid() -> None:
+    # Always remove the port file before restart so the watchdog does not
+    # keep polling a stale port from the previous daemon instance.
+    PORT_FILE.unlink(missing_ok=True)
+
     if PID_FILE.exists():
         try:
             pid = int(PID_FILE.read_text().strip())
@@ -80,10 +130,18 @@ def _clear_stale_pid() -> None:
             PID_FILE.unlink(missing_ok=True)
             log.info("Cleared stale PID file (pid=%s)", pid)
         else:
+            # Process is alive but not serving the port — kill it so the
+            # new daemon can bind to the canonical port (8080) rather than
+            # falling back to 8081+ and becoming invisible to the watchdog.
             log.warning(
-                "PID %s is still alive but port %s is not responding — leaving PID file",
+                "PID %s is alive but port %s is not responding — killing stale process",
                 pid, PORT,
             )
+            _kill_process(pid)
+            PID_FILE.unlink(missing_ok=True)
+            log.info("Cleared PID file after killing stale process (pid=%s)", pid)
+            # Brief pause to let the OS fully release the port before the new daemon starts
+            time.sleep(2)
 
 
 def _start_gateway() -> None:

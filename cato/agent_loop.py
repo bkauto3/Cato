@@ -393,22 +393,31 @@ class AgentLoop:
         """Register a tool with the global registry."""
         register_tool(name, fn)
 
-    async def run(self, session_id: str, message: str, agent_id: str) -> tuple[str, str]:
+    async def run(self, session_id: str, message: str, agent_id: str) -> tuple[str, str, str]:
         """
-        Process *message* and return (final_text, cost_footer).
+        Process *message* and return (final_text, cost_footer, model_used).
 
         Persists every turn to JSONL transcript.
         Raises BudgetExceeded if spend caps are breached.
         """
         tpath = _transcript_path(agent_id, session_id)
-        workspace = _CATO_DIR / agent_id / "workspace"
+        # Prefer the config-declared workspace_dir (e.g. ~/.cato/workspace).
+        # Fall back to the legacy per-agent path so existing installs are not broken.
+        _raw_ws = getattr(self._cfg, "workspace_dir", None)
+        workspace = (
+            Path(_raw_ws).expanduser().resolve()
+            if _raw_ws
+            else _CATO_DIR / agent_id / "workspace"
+        )
         daily_log = _CATO_DIR / agent_id / "memory" / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.md"
+        skills_dir = _CATO_DIR.parent / ".cato" / "skills"  # ~/.cato/skills
 
         memory_chunks = await self._memory.asearch(message, top_k=4)
         system_prompt = self._ctx.build_system_prompt(
             workspace_dir=workspace,
             memory_chunks=memory_chunks,
             daily_log_path=daily_log if daily_log.exists() else None,
+            skills_dir=skills_dir if skills_dir.exists() else None,
         )
 
         ctx_tokens  = self._ctx.count_tokens(system_prompt)
@@ -454,7 +463,7 @@ class AgentLoop:
                 name="memory-store",
             )
             self._bg_tasks.add(_t)
-            return swarmsync_content, self._budget.format_footer()
+            return swarmsync_content, self._budget.format_footer(), model
 
         while True:
             if planning_turns >= self._cfg.max_planning_turns:
@@ -541,7 +550,7 @@ class AgentLoop:
         )
         self._bg_tasks.add(_correction_task)
 
-        return final_text, self._budget.format_footer()
+        return final_text, self._budget.format_footer(), model
 
     # ------------------------------------------------------------------
     # Streaming

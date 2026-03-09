@@ -14,6 +14,7 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   source?: "web" | "telegram" | "cron" | string;
+  model?: string;  // AI model used (claude, codex, gemini, cursor, swarmsync, etc.)
 }
 
 export type ChatConnectionStatus = "connecting" | "connected" | "disconnected" | "reconnecting";
@@ -56,6 +57,7 @@ export function useChatStream(wsBase?: string, httpPort?: number): UseChatStream
 
   const wsRef       = useRef<WebSocket | null>(null);
   const retriesRef  = useRef(0);
+  const mountedRef  = useRef(true);
   const sessionIdRef = useRef(crypto.randomUUID());
   // Track IDs already in state so we don't double-add from history poll
   const knownIdsRef = useRef<Set<string>>(new Set(loadStored().map((m) => m.id)));
@@ -71,10 +73,28 @@ export function useChatStream(wsBase?: string, httpPort?: number): UseChatStream
     }
   }, [messages]);
 
+  // Content-based dedup key: role + first 200 chars + timestamp within 30s window.
+  // The wider window prevents the same WS response and a history-poll echo from
+  // getting different bucket keys when they arrive near a 5-second boundary.
+  const contentKeysRef = useRef<Set<string>>(new Set());
+
+  const makeContentKey = (m: ChatMessage): string => {
+    const ts = Math.floor(m.timestamp / 30000); // 30s window
+    return `${m.role}:${m.text.slice(0, 200)}:${ts}`;
+  };
+
   const addMessages = useCallback((incoming: ChatMessage[]) => {
-    const novel = incoming.filter((m) => !knownIdsRef.current.has(m.id));
+    const novel = incoming.filter((m) => {
+      if (knownIdsRef.current.has(m.id)) return false;
+      const ck = makeContentKey(m);
+      if (contentKeysRef.current.has(ck)) return false;
+      return true;
+    });
     if (novel.length === 0) return;
-    novel.forEach((m) => knownIdsRef.current.add(m.id));
+    novel.forEach((m) => {
+      knownIdsRef.current.add(m.id);
+      contentKeysRef.current.add(makeContentKey(m));
+    });
     setMessages((prev) => [...prev, ...novel].sort((a, b) => a.timestamp - b.timestamp));
   }, []);
 
@@ -89,13 +109,17 @@ export function useChatStream(wsBase?: string, httpPort?: number): UseChatStream
           id: string; role: string; text: string; channel: string;
           session_id: string; timestamp: number;
         }>;
-        const mapped: ChatMessage[] = entries.map((e) => ({
-          id:        e.id,
-          role:      e.role === "user" ? "user" : "assistant",
-          text:      e.text,
-          timestamp: e.timestamp,
-          source:    e.channel,
-        }));
+        // Skip "web" channel entries — those messages already arrive through the
+        // WebSocket connection and would otherwise appear twice.
+        const mapped: ChatMessage[] = entries
+          .filter((e) => e.channel !== "web")
+          .map((e) => ({
+            id:        e.id,
+            role:      e.role === "user" ? "user" : "assistant",
+            text:      e.text,
+            timestamp: e.timestamp,
+            source:    e.channel,
+          }));
         addMessages(mapped);
       } catch {
         // daemon not running — silently skip
@@ -116,6 +140,7 @@ export function useChatStream(wsBase?: string, httpPort?: number): UseChatStream
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (!mountedRef.current) return;
       setConnectionStatus("connected");
       retriesRef.current = 0;
     };
@@ -134,6 +159,7 @@ export function useChatStream(wsBase?: string, httpPort?: number): UseChatStream
             text,
             timestamp: Date.now(),
             source:    data.channel ?? "web",
+            model:     data.model,  // Include model attribution
           };
           addMessages([msg]);
           setIsStreaming(false);
@@ -157,6 +183,7 @@ export function useChatStream(wsBase?: string, httpPort?: number): UseChatStream
     };
 
     ws.onclose = () => {
+      if (!mountedRef.current) return;
       if (retriesRef.current < MAX_RETRIES) {
         const delay = Math.min(INITIAL_BACKOFF_MS * 2 ** retriesRef.current, 16_000);
         retriesRef.current += 1;
@@ -171,6 +198,7 @@ export function useChatStream(wsBase?: string, httpPort?: number): UseChatStream
   useEffect(() => {
     connect();
     return () => {
+      mountedRef.current = false;
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();

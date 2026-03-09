@@ -51,13 +51,26 @@ def strip_tool_calls(text: str) -> str:
 # BUG FIX CHAT-003: Build system prompt with identity files
 # ---------------------------------------------------------------------------
 
-def build_system_prompt(base_prompt: str = "") -> str:
-    """Prepend Cato identity content from workspace files to the system prompt."""
-    data_dir = get_data_dir()
+def build_system_prompt(base_prompt: str = "", workspace_dir: "Path | None" = None) -> str:
+    """Prepend Cato identity content from workspace files to the system prompt.
+
+    Looks for SOUL.md and IDENTITY.md in *workspace_dir*.  When *workspace_dir*
+    is not supplied the function reads it from the config (falling back to
+    ``~/.cato/workspace``), which is where the files actually live at runtime.
+    """
+    from pathlib import Path as _Path
+    if workspace_dir is None:
+        try:
+            from cato.config import CatoConfig
+            cfg = CatoConfig.load()
+            ws = getattr(cfg, "workspace_dir", "") or ""
+            workspace_dir = _Path(ws).expanduser().resolve() if ws else (_Path.home() / ".cato" / "workspace")
+        except Exception:
+            workspace_dir = _Path.home() / ".cato" / "workspace"
     identity_files = ["SOUL.md", "IDENTITY.md"]
     identity_content = []
     for fname in identity_files:
-        fpath = data_dir / fname
+        fpath = workspace_dir / fname
         if fpath.exists():
             try:
                 identity_content.append(fpath.read_text(encoding="utf-8"))
@@ -245,7 +258,7 @@ class Gateway:
             "agent_id":   agent_id or self._cfg.agent_name,
         })
 
-    async def send(self, session_id: str, text: str, channel: str) -> None:
+    async def send(self, session_id: str, text: str, channel: str, model: str = "") -> None:
         """Called by agent loop to deliver a response to the originating channel."""
         # BUG FIX CHAT-001/CHAT-002: strip tool call XML and budget footer
         clean_text = strip_tool_calls(text)
@@ -255,6 +268,7 @@ class Gateway:
                 "type": "response", "session_id": session_id,
                 "text": clean_text,
                 "channel": channel,
+                "model": model,
             })
             return
         for adapter in self._adapters:
@@ -291,8 +305,18 @@ class Gateway:
                 message=task["message"],
                 agent_id=agent_id,
             )
-            text, footer = result if isinstance(result, tuple) else (str(result), "")
-            await self.send(session_id, f"{text}\n\n{footer}".strip(), channel)
+            # Unpack (text, footer, model) or legacy (text, footer)
+            if isinstance(result, tuple):
+                if len(result) == 3:
+                    text, footer, model = result
+                else:
+                    text, footer = result
+                    model = ""
+            else:
+                text = str(result)
+                footer = ""
+                model = ""
+            await self.send(session_id, f"{text}\n\n{footer}".strip(), channel, model=model)
         except BudgetExceeded as exc:
             await self.send(session_id, f"Budget cap reached: {exc}", channel)
         except Exception as exc:
@@ -872,7 +896,14 @@ class Gateway:
         # Index all workspace .md files (including MEMORY.md) into SQLite so
         # that asearch() can retrieve them semantically each turn.  Idempotent:
         # already-indexed files are skipped based on source_file path key.
-        workspace_dir = _CATO_DIR / self._cfg.agent_name / "workspace"
+        # Prefer the config-declared workspace_dir (e.g. ~/.cato/workspace).
+        # Fall back to the old per-agent path so existing installs aren't broken.
+        _raw_ws = getattr(self._cfg, "workspace_dir", None)
+        workspace_dir = (
+            Path(_raw_ws).expanduser().resolve()
+            if _raw_ws
+            else _CATO_DIR / self._cfg.agent_name / "workspace"
+        )
         if workspace_dir.exists():
             try:
                 n = memory.load_workspace_files(workspace_dir)

@@ -125,19 +125,17 @@ class TestBuildSystemPrompt:
         assert len(prompt) > 0
 
     def test_identity_files_loaded_when_present(self, tmp_path):
-        """When SOUL.md exists in data_dir, its content appears in the prompt."""
+        """When SOUL.md exists in the workspace_dir, its content appears in the prompt."""
         soul_content = "You are a wise AI named Cato."
         soul_file = tmp_path / "SOUL.md"
         soul_file.write_text(soul_content, encoding="utf-8")
 
-        with patch("cato.gateway.get_data_dir", return_value=tmp_path):
-            prompt = build_system_prompt()
+        prompt = build_system_prompt(workspace_dir=tmp_path)
         assert soul_content in prompt
 
     def test_missing_identity_files_ok(self, tmp_path):
         """Missing SOUL.md / IDENTITY.md do not cause errors."""
-        with patch("cato.gateway.get_data_dir", return_value=tmp_path):
-            prompt = build_system_prompt("base")
+        prompt = build_system_prompt("base", workspace_dir=tmp_path)
         assert "base" in prompt
         assert "Cato" in prompt
 

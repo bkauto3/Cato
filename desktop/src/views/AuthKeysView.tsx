@@ -18,41 +18,27 @@ const VAULT_KEY_META: Record<string, string> = {
   tavily_api_key:      "Tavily web search",
 };
 
-const CLI_BACKENDS = [
-  {
-    id: "codex",
-    label: "Codex",
-    status: "working",
-    note: "No login needed — runs locally via warm pool",
-    loginCmd: null,
-  },
-  {
-    id: "cursor",
-    label: "Cursor Agent",
-    status: "working",
-    note: "Uses Cursor IDE session — log in via Cursor IDE",
-    loginCmd: null,
-  },
-  {
-    id: "claude",
-    label: "Claude Code",
-    status: "working",
-    note: "CLI agent — run 'claude login' once to authenticate",
-    loginCmd: "claude login",
-  },
-  {
-    id: "gemini",
-    label: "Gemini",
-    status: "degraded",
-    note: "Hangs in non-interactive mode on this machine — timeout/degraded",
-    loginCmd: "gemini auth login",
-  },
-] as const;
+// CLI backend metadata (labels, login commands). Status is fetched live.
+const CLI_META: Record<string, { label: string; loginCmd: string | null }> = {
+  claude: { label: "Claude Code", loginCmd: "claude login" },
+  codex:  { label: "Codex",       loginCmd: null },
+  gemini: { label: "Gemini",      loginCmd: "gemini auth login" },
+  cursor: { label: "Cursor Agent", loginCmd: null },
+};
+
+interface CliToolStatus {
+  installed: boolean;
+  logged_in: boolean;
+  version: string;
+  version_check_ok?: boolean;
+}
 
 export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
   const base = `http://127.0.0.1:${httpPort}`;
   const [vaultKeys, setVaultKeys] = useState<string[]>([]);
   const [config, setConfig] = useState<Record<string, unknown>>({});
+  const [cliStatus, setCliStatus] = useState<Record<string, CliToolStatus>>({});
+  const [restartingCli, setRestartingCli] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // OpenRouter key entry
@@ -72,18 +58,33 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
 
   const fetchData = useCallback(async () => {
     try {
-      const [kr, cr] = await Promise.all([
+      const [kr, cr, cs] = await Promise.all([
         fetch(`${base}/api/vault/keys`).then((r) => r.json()),
         fetch(`${base}/api/config`).then((r) => r.json()),
+        fetch(`${base}/api/cli/status`).then((r) => r.json()).catch(() => ({})),
       ]);
       setVaultKeys(kr as string[]);
       setConfig(cr as Record<string, unknown>);
+      setCliStatus(cs as Record<string, CliToolStatus>);
     } catch {
       // silently ignore; show whatever we have
     } finally {
       setLoading(false);
     }
   }, [base]);
+
+  const restartCli = async (name: string) => {
+    setRestartingCli(name);
+    try {
+      await fetch(`${base}/api/cli/${name}/restart`, { method: "POST" });
+      // Refresh status after restart
+      setTimeout(() => fetchData(), 1500);
+    } catch {
+      // ignore
+    } finally {
+      setTimeout(() => setRestartingCli(null), 2000);
+    }
+  };
 
   useEffect(() => {
     fetchData();
@@ -229,32 +230,51 @@ export const AuthKeysView: React.FC<AuthKeysViewProps> = ({ httpPort }) => {
         </div>
       </div>
 
-      {/* CLI backend status */}
+      {/* CLI backend status — live from /api/cli/status */}
       <div className="section-block">
         <div className="section-title">Coding Agent Backends</div>
         <div className="section-desc">
-          Coding tasks dispatch to these CLI backends. Status reflects configuration on this machine.
+          Coding tasks dispatch to these CLI backends. Status is live from the daemon.
         </div>
         <div className="cli-status-list">
-          {CLI_BACKENDS.map((cli) => (
-            <div key={cli.id} className="cli-status-row">
-              <div className="cli-status-info">
-                <span className="cli-label">{cli.label}</span>
-                <span
-                  className={cli.status === "working" ? "badge-green" : "badge-yellow"}
-                  style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, fontWeight: 700 }}
-                >
-                  {cli.status === "working" ? "Working" : "Degraded"}
-                </span>
+          {Object.entries(CLI_META).map(([id, meta]) => {
+            const tool = cliStatus[id];
+            const isWarm = tool?.installed && tool?.logged_in;
+            const statusLabel = !tool ? "unknown" : isWarm ? "Working" : tool.installed ? "Cold" : "Not Installed";
+            const badgeClass = isWarm ? "badge-green" : tool?.installed ? "badge-yellow" : "badge-red";
+
+            return (
+              <div key={id} className="cli-status-row">
+                <div className="cli-status-info">
+                  <span className="cli-label">{meta.label}</span>
+                  <span
+                    className={badgeClass}
+                    style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, fontWeight: 700 }}
+                  >
+                    {statusLabel}
+                  </span>
+                  {tool?.version && (
+                    <span style={{ fontSize: 10, color: "var(--text-muted, #888)", marginLeft: 6 }}>
+                      {tool.version}
+                    </span>
+                  )}
+                </div>
+                <div className="cli-status-actions">
+                  {meta.loginCmd && (
+                    <code className="cli-cmd" style={{ marginTop: 4 }}>{meta.loginCmd}</code>
+                  )}
+                  <button
+                    className="btn-secondary"
+                    style={{ fontSize: 11, padding: "2px 8px", marginLeft: 8 }}
+                    onClick={() => restartCli(id)}
+                    disabled={restartingCli === id}
+                  >
+                    {restartingCli === id ? "Restarting..." : "Restart"}
+                  </button>
+                </div>
               </div>
-              <div className="cli-status-actions">
-                <span className="cli-note">{cli.note}</span>
-                {cli.loginCmd && (
-                  <code className="cli-cmd" style={{ marginTop: 4 }}>{cli.loginCmd}</code>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

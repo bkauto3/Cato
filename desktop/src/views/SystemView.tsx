@@ -52,6 +52,7 @@ function CliPoolPanel({ httpPort }: { httpPort: number }) {
   const [data, setData] = useState<CliStatusData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [restartingCli, setRestartingCli] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
     setLoading(true);
@@ -72,6 +73,18 @@ function CliPoolPanel({ httpPort }: { httpPort: number }) {
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
+
+  const restartCli = async (name: string) => {
+    setRestartingCli(name);
+    try {
+      await fetch(`${base}/api/cli/${name}/restart`, { method: "POST" });
+      setTimeout(() => fetchStatus(), 1500);
+    } catch {
+      // ignore
+    } finally {
+      setTimeout(() => setRestartingCli(null), 2000);
+    }
+  };
 
   const isEmpty = !data || Object.keys(data).length === 0;
 
@@ -131,6 +144,14 @@ function CliPoolPanel({ httpPort }: { httpPort: number }) {
                     {tool.version}
                   </div>
                 )}
+                <button
+                  className="btn-secondary"
+                  style={{ marginTop: "0.5rem", fontSize: "0.7rem", padding: "2px 8px" }}
+                  onClick={() => restartCli(name)}
+                  disabled={restartingCli === name}
+                >
+                  {restartingCli === name ? "Restarting..." : "Restart"}
+                </button>
               </div>
             );
           })}

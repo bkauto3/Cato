@@ -343,13 +343,25 @@ def _run_daemon(config: CatoConfig, agent: str, channel: str) -> None:
                 await site.start()
                 actual_port = port + attempt
                 if attempt > 0:
-                    log.info(f"Port {port} in use, using {actual_port} instead")
+                    log.warning(
+                        "Port %d in use — daemon bound to %d instead. "
+                        "If this is unexpected, ensure the old daemon process is fully stopped.",
+                        port, actual_port,
+                    )
                 break
             except OSError:
                 if attempt == 4:
                     raise
+                # Brief pause between attempts so the OS can release the port
+                await asyncio.sleep(1)
         log.info(f"Web UI at http://127.0.0.1:{actual_port}")
         safe_print(f"Cato daemon running on http://127.0.0.1:{actual_port}. Press Ctrl-C to stop.")
+        # Write the actual bound port to a file so other tools (watchdog, UI) can discover it
+        _port_file = _CATO_DIR / "cato.port"
+        try:
+            _port_file.write_text(str(actual_port))
+        except OSError:
+            pass
 
         try:
             await gateway.start()
@@ -362,6 +374,9 @@ def _run_daemon(config: CatoConfig, agent: str, channel: str) -> None:
         finally:
             await runner.cleanup()
             await gateway.stop()
+            # Remove port file on clean shutdown
+            _port_file = _CATO_DIR / "cato.port"
+            _port_file.unlink(missing_ok=True)
 
     try:
         if vault is None:

@@ -11,19 +11,50 @@ interface ChatViewProps {
   httpPort?: number;
 }
 
-const SourceBadge: React.FC<{ source?: string }> = ({ source }) => {
-  if (!source || source === "web") return null;
-  const label = source === "telegram" ? "Telegram" : source;
-  const color = source === "telegram" ? "#229ED9" : "#94a3b8";
-  return (
-    <span style={{
-      fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 8,
-      background: `${color}22`, color, border: `1px solid ${color}55`,
-      marginLeft: 6, lineHeight: 1.4,
-    }}>
-      {label}
-    </span>
-  );
+interface BadgeProps {
+  source?: string;
+  model?: string;
+}
+
+const SourceBadge: React.FC<BadgeProps> = ({ source, model }) => {
+  const badges = [];
+
+  if (source && source !== "web") {
+    const label = source === "telegram" ? "Telegram" : source;
+    const color = source === "telegram" ? "#229ED9" : "#94a3b8";
+    badges.push(
+      <span key={`source-${source}`} style={{
+        fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 8,
+        background: `${color}22`, color, border: `1px solid ${color}55`,
+        marginLeft: 6, lineHeight: 1.4,
+      }}>
+        {label}
+      </span>
+    );
+  }
+
+  if (model) {
+    const modelLabel = model.toUpperCase();
+    const modelColors: Record<string, string> = {
+      "CLAUDE": "#9B5DE5",
+      "CODEX": "#00D9FF",
+      "GEMINI": "#F77F00",
+      "CURSOR": "#06FFA5",
+      "SWARMSYNC": "#FF006E",
+    };
+    const modelColor = Object.entries(modelColors).find(([key]) => modelLabel.includes(key))?.[1] || "#64748B";
+    badges.push(
+      <span key={`model-${model}`} style={{
+        fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 8,
+        background: `${modelColor}22`, color: modelColor, border: `1px solid ${modelColor}55`,
+        marginLeft: 6, lineHeight: 1.4,
+      }}>
+        {modelLabel}
+      </span>
+    );
+  }
+
+  return badges.length > 0 ? <>{badges}</> : null;
 };
 
 const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
@@ -33,7 +64,7 @@ const ChatBubble: React.FC<{ message: ChatMessage }> = ({ message }) => {
       <div className="chat-bubble-header">
         <span className="chat-bubble-role">
           {isUser ? "You" : "Cato"}
-          <SourceBadge source={message.source} />
+          <SourceBadge source={message.source} model={message.model} />
         </span>
         <time className="chat-bubble-time">
           {new Date(message.timestamp).toLocaleTimeString([], {
@@ -151,9 +182,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ wsBase, httpPort }) => {
         <button
           type="submit"
           className="chat-send-btn"
-          disabled={!input.trim() || connectionStatus !== "connected"}
+          disabled={!input.trim() || connectionStatus !== "connected" || isStreaming}
         >
-          Send
+          {isStreaming ? "Working..." : "Send"}
         </button>
       </form>
     </div>
