@@ -654,3 +654,119 @@ async def invoke_subagent(
 
     logger.info("Subagent routing task to backend=%r", backend)
     return await fn(prompt, task)
+
+
+# ---------------------------------------------------------------------------
+# Genesis pipeline phase routing
+# ---------------------------------------------------------------------------
+
+# Primary and fallback CLI workers for each Genesis phase (1-indexed).
+# None as fallback means no automatic retry — surface error to user directly.
+_GENESIS_PHASE_ROUTING: dict[int, tuple[SubagentBackend, SubagentBackend | None]] = {
+    1: ("claude", None),    # Market research — deep research + web tools
+    2: ("claude", None),    # SEO + marketing — structured doc generation
+    3: ("gemini", "claude"),# Design system — large-context descriptions; fallback if gemini hangs
+    4: ("claude", "codex"), # Technical spec — multi-tool orchestration
+    5: ("claude", "codex"), # Construction (Ralph loop) — loop controller
+    6: ("codex", "claude"), # Test + fix — codex --full-auto fix loop
+    7: ("claude", None),    # Deploy + validate — vault access + approval gate
+    8: ("claude", None),    # Marketing automation — fan-out coordination
+    9: ("claude", None),    # Long-term health — read-only analysis
+}
+
+# Per-phase timeouts in seconds.
+_GENESIS_PHASE_TIMEOUTS: dict[int, float] = {
+    1: 180.0,
+    2: 120.0,
+    3: 120.0,
+    4: 150.0,
+    5: 600.0,
+    6: 300.0,
+    7: 240.0,
+    8: 120.0,
+    9:  60.0,
+}
+
+
+async def invoke_for_genesis_phase(
+    phase: int,
+    context: str,
+    business_id: str,
+) -> Dict:
+    """
+    Route a Genesis pipeline phase to its designated CLI worker.
+
+    Looks up the primary backend for *phase* in ``_GENESIS_PHASE_ROUTING``,
+    calls ``invoke_subagent``, and automatically retries on the fallback
+    backend if the primary returns ``degraded=True``.  If both primary and
+    fallback degrade, the degraded fallback result is returned and the caller
+    is responsible for Andon Cord escalation.
+
+    Args:
+        phase: Genesis phase number (1-9).
+        context: Full prompt context for the phase (research brief, spec, etc.).
+        business_id: Slug identifier for the business build (used in task label).
+
+    Returns:
+        Same dict shape as ``invoke_subagent``:
+        {"model", "response", "confidence", "latency_ms", "degraded", "source"}
+
+    Raises:
+        ValueError: If *phase* is not in the range 1-9.
+    """
+    if phase not in _GENESIS_PHASE_ROUTING:
+        raise ValueError(
+            f"Invalid Genesis phase {phase!r}. Must be an integer 1-9."
+        )
+
+    primary, fallback = _GENESIS_PHASE_ROUTING[phase]
+    timeout = _GENESIS_PHASE_TIMEOUTS[phase]
+    task_label = f"genesis:{business_id}:phase{phase}"
+
+    logger.info(
+        "Genesis phase %d routing to primary=%r (fallback=%r, timeout=%.0fs) business=%r",
+        phase, primary, fallback, timeout, business_id,
+    )
+
+    import asyncio as _asyncio
+    try:
+        result = await _asyncio.wait_for(
+            invoke_subagent(context, task_label, backend=primary),
+            timeout=timeout,
+        )
+    except _asyncio.TimeoutError:
+        logger.warning(
+            "Genesis phase %d primary=%r timed out after %.0fs",
+            phase, primary, timeout,
+        )
+        result = {
+            "model": primary, "response": f"[Timeout] phase {phase} exceeded {timeout:.0f}s",
+            "confidence": 0.0, "latency_ms": timeout * 1000, "degraded": True, "source": "timeout",
+        }
+
+    if result.get("degraded") and fallback is not None:
+        logger.warning(
+            "Genesis phase %d primary=%r degraded, retrying with fallback=%r",
+            phase, primary, fallback,
+        )
+        try:
+            result = await _asyncio.wait_for(
+                invoke_subagent(context, task_label, backend=fallback),
+                timeout=timeout,
+            )
+        except _asyncio.TimeoutError:
+            logger.error(
+                "Genesis phase %d fallback=%r also timed out — Andon Cord needed",
+                phase, fallback,
+            )
+            result = {
+                "model": fallback, "response": f"[Timeout] phase {phase} fallback exceeded {timeout:.0f}s",
+                "confidence": 0.0, "latency_ms": timeout * 1000, "degraded": True, "source": "timeout",
+            }
+        if result.get("degraded"):
+            logger.error(
+                "Genesis phase %d fallback=%r also degraded — Andon Cord needed",
+                phase, fallback,
+            )
+
+    return result
