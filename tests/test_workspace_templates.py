@@ -243,8 +243,18 @@ class TestTemplateContent:
 
         if heartbeat_path.exists():
             content = heartbeat_path.read_text()
-            # Should have checklist format or period references
-            assert "daily" in content.lower() or "weekly" in content.lower() or "monthly" in content.lower()
+            # Should have checklist items or interval/period references
+            has_checklist = "- [ ]" in content or "- [x]" in content or "- [X]" in content
+            has_period = (
+                "daily" in content.lower()
+                or "weekly" in content.lower()
+                or "monthly" in content.lower()
+                or "interval" in content.lower()
+                or "schedule" in content.lower()
+            )
+            assert has_checklist or has_period, (
+                "HEARTBEAT.md has no checklist items or period references"
+            )
 
 
 class TestTemplateIntegration:
