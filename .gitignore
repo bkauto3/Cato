@@ -40,6 +40,44 @@ CATO_SESSION_*.md
 *_SESSION_*.md
 *_EXECUTION.md
 *_IMPLEMENTATION_REPORT.md
+
+# Dev session docs and checklists (personal working files)
+CATO_BUILD_IMPROVEMENTS_CHECKLIST.md
+CATO_BUILD_POTENTIAL_ISSUES.md
+CATO_BUILD_RISKS.md
+CATO_CLI_INTEGRATION_CHECKLIST.md
+CATO_FINAL_TEST_REPORT.md
+CATO_GENESIS_BRAINSTORM.md
+CATO_HUDSON_REVIEW_M3.md
+CATO_HUDSON_REVIEW_M4.md
+DAEMON_RESTART_COMPLETE.md
+SKILLS_RECOGNITION_FIX_VERIFIED.md
+TELEGRAM_DESKTOP_INTEGRATION_FIX.md
+TELEGRAM_INTEGRATION_COMPLETE.md
+desktop/WINDOWS_BUILD.md
+
+# Kraken/test run artifacts
+kraken_e2e_report.json
+kraken_e2e_test.py
+kraken_test_output.txt
+kraken_test_run.txt
+test_skills.py
+
+# Local bridge/startup scripts (machine-specific)
+launch_bridge.py
+register_telegram_bridge_task.ps1
+start_telegram_bridge.ps1
+scripts/install_watchdog.ps1
+
+# Utility scripts (local dev only)
+scripts/sync_version.py
+scripts/verify_python_build.py
+
+# Claude Code session data
+.claude/
+
+# Log directories
+logs/
 # Desktop app build artifacts
 desktop/src-tauri/target/
 desktop/dist/
