@@ -64,18 +64,28 @@ class ShellTool:
     async def execute(self, args: dict[str, Any]) -> str:
         """Dispatch from agent_loop tool registry (receives raw args dict)."""
         command = args.get("command", "")
-        mode = args.get("mode", "gateway")
         timeout = min(int(args.get("timeout", 30)), _MAX_TIMEOUT)
         cwd = args.get("cwd") or str(_DEFAULT_WORKSPACE)
 
-        # Clamp cwd to workspace root to prevent directory traversal
-        workspace_root = _CATO_DIR / "workspace"
-        if cwd:
-            cwd_path = Path(cwd).resolve()
-            try:
-                cwd_path.relative_to(workspace_root.resolve())
-            except ValueError:
-                cwd = str(workspace_root)
+        # Auto-upgrade to full mode for PowerShell commands so they can run
+        # anywhere on the system with unrestricted access.
+        first_word = shlex.split(command)[0].lower() if command.strip() else ""
+        base_cmd = Path(first_word).name
+        if base_cmd in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
+            mode = "full"
+        else:
+            mode = args.get("mode", "gateway")
+
+        # Only clamp cwd to workspace root in sandbox/gateway mode.
+        # Full mode (PowerShell) may need to operate anywhere on the system.
+        if mode != "full":
+            workspace_root = _CATO_DIR / "workspace"
+            if cwd:
+                cwd_path = Path(cwd).resolve()
+                try:
+                    cwd_path.relative_to(workspace_root.resolve())
+                except ValueError:
+                    cwd = str(workspace_root)
 
         result = await self._run(command=command, mode=mode, timeout=timeout, cwd=cwd)
         return json.dumps(result)

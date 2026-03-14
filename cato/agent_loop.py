@@ -135,6 +135,21 @@ def _register_web_search_tools(vault: Any = None) -> None:
     register_tool("academic.pubmed", _academic_pubmed)
 
 
+def _register_shell_tools() -> None:
+    """Register shell.exec tool action — PowerShell and general shell execution."""
+    try:
+        from .tools.shell import ShellTool
+    except ImportError:
+        return
+
+    tool = ShellTool()
+
+    async def _shell_exec(args: dict) -> str:
+        return await tool.execute(args)
+
+    register_tool("shell.exec", _shell_exec)
+
+
 def _register_python_executor_tools() -> None:
     """Register python.execute tool action (Skill 7)."""
     try:
@@ -399,6 +414,9 @@ class AgentLoop:
 
         # Register Python executor tool action (Skill 7)
         _register_python_executor_tools()
+
+        # Register shell execution tool action (shell.exec)
+        _register_shell_tools()
 
         # Register memory fact tool actions (Skill 2)
         _register_memory_tools(memory=memory)
