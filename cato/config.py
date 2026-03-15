@@ -69,7 +69,7 @@ class CatoConfig:
     vault: Optional[dict] = None   # API keys / credentials for search, login, etc.
 
     # Safety gates
-    safety_mode: str = "strict"             # strict | permissive | off
+    safety_mode: str = "strict"             # strict | permissive | desktop | off
 
     # Budget forecast
     budget_forecast_enabled: bool = True    # show cost estimate before tasks

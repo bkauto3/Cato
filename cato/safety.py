@@ -10,6 +10,8 @@ Checks for a STOP signal file (get_data_dir()/STOP) before every action.
 Configuration:
     safety_mode: strict      — IRREVERSIBLE and HIGH_STAKES prompt user
     safety_mode: permissive  — HIGH_STAKES prompts, IRREVERSIBLE skips prompt
+    safety_mode: desktop     — like strict, but confirmation deferred to frontend
+                               via a callback instead of stdin (for non-TTY contexts)
     safety_mode: off         — all gates disabled (not recommended)
 """
 
@@ -92,12 +94,28 @@ class SafetyGuard:
         allowed = guard.check_and_confirm("browser.click", {"selector": "#delete-all"})
         if not allowed:
             raise RuntimeError("User denied action")
+
+    Desktop mode::
+
+        async def ask_frontend(tool_name, inputs, tier_label):
+            # Send confirmation request over WebSocket, await user response
+            return await ws_confirm(tool_name, inputs)
+
+        guard = SafetyGuard(
+            config={"safety_mode": "desktop"},
+            confirmation_callback=ask_frontend,
+        )
     """
 
-    def __init__(self, config: Optional[dict] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        confirmation_callback: Optional[object] = None,
+    ) -> None:
         cfg = config or {}
         self._mode: str = cfg.get("safety_mode", "strict").lower()
         self._stop_file: Path = self._stop_file_path()
+        self._confirmation_callback = confirmation_callback
 
     @staticmethod
     def _stop_file_path() -> Path:
@@ -176,9 +194,45 @@ class SafetyGuard:
         }
         _safe_print(f"  Inputs: {short_inputs}")
 
+        # Desktop mode: delegate confirmation to a callback (e.g. WebSocket prompt)
+        if self._mode == "desktop" and self._confirmation_callback is not None:
+            import asyncio
+            import inspect
+
+            cb = self._confirmation_callback
+            try:
+                if inspect.iscoroutinefunction(cb):
+                    # Run the async callback — get or create an event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+                    if loop and loop.is_running():
+                        # Already in an async context — create a task and use
+                        # a thread to block-wait for the result
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                            result = pool.submit(
+                                asyncio.run, cb(tool_name, inputs, tier_label)
+                            ).result(timeout=120)
+                    else:
+                        result = asyncio.run(cb(tool_name, inputs, tier_label))
+                else:
+                    result = cb(tool_name, inputs, tier_label)
+
+                if result:
+                    logger.info("Desktop user approved %s action: %s", tier_label, tool_name)
+                    return True
+                logger.info("Desktop user denied %s action: %s", tier_label, tool_name)
+                return False
+            except Exception as exc:
+                logger.error("Desktop confirmation callback failed: %s", exc)
+                _safe_print(f"[CATO SAFETY] Confirmation callback error: {exc}. Denying action.")
+                return False
+
         import sys
         if not sys.stdin.isatty():
-            # Daemon mode — no TTY to prompt. Deny by default (fail-safe).
+            # Daemon mode without desktop callback — deny by default (fail-safe).
             logger.warning("Safety check: non-interactive context, denying %s by default.", tool_name)
             _safe_print("[CATO SAFETY] Non-interactive context: action denied by default.")
             return False

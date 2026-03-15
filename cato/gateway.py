@@ -95,6 +95,8 @@ class Gateway:
         # Lock guards lazy agent-loop initialization (first message triggers it)
         self._agent_loop_lock: asyncio.Lock = asyncio.Lock()
         self._agent_loop_initializing: bool = False
+        # Pending safety confirmation futures keyed by confirmation_id
+        self._pending_confirmations: dict[str, asyncio.Future] = {}
         # Node manager for remote device capability registration
         self._nodes: NodeManager = NodeManager()
         # Heartbeat monitor (set in start())
@@ -346,6 +348,14 @@ class Gateway:
                     await self._ws_send(ws, {"type": "error", "text": f"vault save failed: {exc}"})
             else:
                 await self._ws_send(ws, {"type": "error", "text": "vault_key and value required"})
+
+        elif msg_type == "safety_confirm_response":
+            # Desktop user responded to a safety confirmation dialog
+            confirm_id = data.get("confirmation_id", "")
+            approved = data.get("approved", False)
+            fut = self._pending_confirmations.pop(confirm_id, None)
+            if fut and not fut.done():
+                fut.set_result(bool(approved))
 
         elif msg_type == "skill_list":
             await self._ws_send(ws, {"type": "skill_list_result", "skills": self._list_skills()})
@@ -777,10 +787,61 @@ class Gateway:
             except Exception as exc:
                 logger.warning("workspace indexing failed (non-fatal): %s", exc)
         ctx    = ContextBuilder(max_tokens=self._cfg.context_budget_tokens)
+        # In desktop mode, provide a confirmation callback so elevated shell
+        # commands can prompt the user via WebSocket instead of stdin.
+        from .safety import SafetyGuard
+        safety_guard = None
+        if self._cfg.safety_mode == "desktop":
+            safety_guard = SafetyGuard(
+                config={"safety_mode": "desktop"},
+                confirmation_callback=self._desktop_confirm_callback,
+            )
+
         loop = AgentLoop(
             config=self._cfg, budget=self._budget, vault=self._vault,
             memory=memory, context_builder=ctx,
+            safety_guard=safety_guard,
         )
         register_all_tools(loop)  # shell, file, memory, browser (Conduit when conduit_enabled)
         register_conduit_web_tools(loop.register_tool, self._cfg)  # web.search, web.code, etc. with config
         return loop
+
+    async def _desktop_confirm_callback(
+        self, tool_name: str, inputs: dict, tier_label: str,
+    ) -> bool:
+        """Send a safety confirmation request to the desktop frontend via WebSocket.
+
+        Broadcasts a ``safety_confirm_request`` message to all connected WS
+        clients and waits up to 120 seconds for a ``safety_confirm_response``.
+        """
+        import uuid
+
+        confirmation_id = str(uuid.uuid4())
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[bool] = loop.create_future()
+        self._pending_confirmations[confirmation_id] = fut
+
+        # Broadcast confirmation request to all connected frontend clients
+        short_inputs = {
+            k: (str(v)[:120] + "..." if len(str(v)) > 120 else v)
+            for k, v in inputs.items()
+        }
+        payload = {
+            "type": "safety_confirm_request",
+            "confirmation_id": confirmation_id,
+            "tool_name": tool_name,
+            "inputs": short_inputs,
+            "tier_label": tier_label,
+        }
+        for ws in list(self._ws_clients):
+            try:
+                await self._ws_send(ws, payload)
+            except Exception:
+                pass
+
+        try:
+            return await asyncio.wait_for(fut, timeout=120)
+        except asyncio.TimeoutError:
+            self._pending_confirmations.pop(confirmation_id, None)
+            logger.warning("Desktop safety confirmation timed out for %s", tool_name)
+            return False
