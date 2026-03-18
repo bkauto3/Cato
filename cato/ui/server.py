@@ -818,11 +818,18 @@ async def create_ui_app(gateway: Optional[Any] = None) -> web.Application:
             return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
     async def save_config(request: web.Request) -> web.Response:
-        """Stub POST /config endpoint. Replace with real persistence as needed."""
+        """POST /config — persist full config via CatoConfig.save()."""
         try:
+            from cato.config import CatoConfig
+            from dataclasses import fields as _fields
             body = await request.json()
             logger.info("Config save requested: %d keys", len(body))
-            # TODO: wire to CatoConfig.save() once that method exists
+            cfg = CatoConfig.load()
+            valid_names = {f.name for f in _fields(CatoConfig) if not f.name.startswith("_")}
+            for key, value in body.items():
+                if key in valid_names:
+                    setattr(cfg, key, value)
+            cfg.save()
             return web.json_response({"status": "ok"})
         except Exception as exc:
             logger.error("Config save error: %s", exc)
